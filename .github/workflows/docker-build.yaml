@@ -46,22 +46,22 @@ jobs:
     
     steps:
       - name: harden-runner
-        uses: step-security/harden-runner@v2
+        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
         with:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
       
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@8d8c7c12f7b958582a5cb82ba16d5903cb27976a # v5
         with:
           images: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
           tags: |
@@ -71,7 +71,7 @@ jobs:
             ${{ inputs.extraTags }}
       
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
@@ -81,7 +81,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
         with:
           context: "{{defaultContext}}:${{ inputs.context }}"
           file: ${{ inputs.dockerfile }}
@@ -97,19 +97,19 @@ jobs:
       - run: rm ~/.docker/config.json
       - name: Authenticate to Google Cloud
         id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
       - name: Login to Artifact Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
         with:
           registry: ${{ inputs.gcp_registry }}
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.auth_token }}
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
           subject-digest: ${{ steps.build.outputs.digest }}
