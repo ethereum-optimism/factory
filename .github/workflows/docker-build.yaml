@@ -35,6 +35,11 @@ on:
         description: 'Container registry URL (e.g., us-docker.pkg.dev/project/repo)'
         required: true
         type: string
+      build_args:
+        description: 'Build arguments as multiline string (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -88,6 +93,7 @@ jobs:
           platforms: ${{ inputs.platforms }}
           tags: ${{ steps.meta.outputs.tags }}
           push: true
+          build-args: ${{ inputs.build_args }}
           cache-from: type=gha,scope=${{ inputs.image_name }}
           cache-to: ${{ github.ref_protected && 'type=gha,mode=max,scope=${{ inputs.image_name }}' || '' }}
 
