@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: 'Dockerfile'
+      target:
+        description: 'Docker build target (for multi-stage Dockerfiles)'
+        required: false
+        type: string
+        default: ''
       extraTags:
         description: 'Additional tags (type=raw format). Default tags (type=sha, type=ref) are always included'
         required: false
@@ -90,6 +95,7 @@ jobs:
         with:
           context: "{{defaultContext}}:${{ inputs.context }}"
           file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
           platforms: ${{ inputs.platforms }}
           tags: ${{ steps.meta.outputs.tags }}
           push: true
