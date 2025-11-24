@@ -80,6 +80,15 @@ jobs:
             type=ref,event=tag
             ${{ inputs.extraTags }}
       
+      - name: Format tags for bake
+        id: bake-tags
+        run: |
+          # Convert newline-separated tags to comma-separated for bake
+          TAGS="${{ steps.meta.outputs.tags }}"
+          # Replace newlines with commas
+          BAKE_TAGS=$(echo "$TAGS" | tr '\n' ',' | sed 's/,$//')
+          echo "tags=$BAKE_TAGS" >> $GITHUB_OUTPUT
+      
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -97,8 +106,7 @@ jobs:
           targets: ${{ inputs.targets }}
           set: |
             ${{ inputs.set }}
-            *.tags=${{ steps.meta.outputs.tags }}
-
+            *.tags=${{ steps.bake-tags.outputs.tags }}
             *.cache-from=type=gha,scope=${{ inputs.image_name }}
             ${{ github.ref_protected && format('*.cache-to=type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
           push: true
