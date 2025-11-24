@@ -70,7 +70,7 @@ jobs:
         with:
           images: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
           tags: |
-            type=sha,format=long,prefix=
+            type=sha
             type=ref,event=branch
             type=ref,event=tag
             ${{ inputs.extraTags }}
