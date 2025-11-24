@@ -73,7 +73,6 @@ jobs:
             type=sha
             type=ref,event=branch
             type=ref,event=tag
-            ${{ inputs.extraTags }}
       
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
