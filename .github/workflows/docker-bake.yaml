@@ -91,13 +91,14 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
           files: ${{ inputs.bake_file }}
           targets: ${{ inputs.targets }}
           set: |
             ${{ inputs.set }}
             *.tags=${{ steps.meta.outputs.tags }}
+
             *.cache-from=type=gha,scope=${{ inputs.image_name }}
             ${{ github.ref_protected && format('*.cache-to=type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
           push: true
