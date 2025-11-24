@@ -75,7 +75,7 @@ jobs:
         with:
           images: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
           tags: |
-            type=sha
+            type=sha,format=long,prefix=
             type=ref,event=branch
             type=ref,event=tag
             ${{ inputs.extraTags }}
@@ -98,9 +98,9 @@ jobs:
           set: |
             ${{ inputs.set }}
             *.tags=${{ steps.meta.outputs.tags }}
+            *.cache-from=type=gha,scope=${{ inputs.image_name }}
+            ${{ github.ref_protected && format('*.cache-to=type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
           push: true
-          cache-from: type=gha,scope=${{ inputs.image_name }}
-          cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
 
       - name: Extract digest from metadata
         id: digest
