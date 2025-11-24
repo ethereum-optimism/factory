@@ -40,11 +40,6 @@ on:
         description: 'Container registry URL (e.g., us-docker.pkg.dev/project/repo)'
         required: true
         type: string
-      set:
-        description: 'Variables to set (KEY=VALUE format, one per line)'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   build:
@@ -80,15 +75,6 @@ jobs:
             type=ref,event=tag
             ${{ inputs.extraTags }}
       
-      - name: Format tags for bake
-        id: bake-tags
-        run: |
-          # Convert newline-separated tags to comma-separated for bake
-          TAGS="${{ steps.meta.outputs.tags }}"
-          # Replace newlines with commas
-          BAKE_TAGS=$(echo "$TAGS" | tr '\n' ',' | sed 's/,$//')
-          echo "tags=$BAKE_TAGS" >> $GITHUB_OUTPUT
-      
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -102,54 +88,8 @@ jobs:
         id: build
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
-          files: ${{ inputs.bake_file }}
           targets: ${{ inputs.targets }}
-          set: |
-            ${{ inputs.set }}
-            *.tags=${{ steps.bake-tags.outputs.tags }}
-            *.cache-from=type=gha,scope=${{ inputs.image_name }}
-            ${{ github.ref_protected && format('*.cache-to=type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
           push: true
-
-      - name: Extract digest from metadata
-        id: digest
-        run: |
-          METADATA="${{ steps.build.outputs.metadata }}"
-          # Extract digest for the primary image (first image in metadata)
-          DIGEST=$(echo "$METADATA" | jq -r '.[0].digest // empty')
-          if [ -z "$DIGEST" ]; then
-            # Fallback: try to find digest in any image metadata
-            DIGEST=$(echo "$METADATA" | jq -r '[.[] | select(.digest != null) | .digest] | first // empty')
-          fi
-          if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
-            echo "Warning: Could not extract digest from metadata"
-            echo "metadata=$METADATA" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-      # reauthentication is necessary because
-      # 1. the actions/attest-build-provenance does not use the gcloud cred helper
-      # 2. the first google-github-actions/auth outputs.auth_token may have expired (5 minutes lifetime)
-      - run: rm ~/.docker/config.json
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
-        with:
-          project_id: ${{ inputs.gcp_project_id }}
-          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
-      - name: Login to Artifact Registry
-        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
-        with:
-          registry: ${{ inputs.gcp_registry }}
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.auth_token }}
-
-      - name: Attest build provenance
-        if: steps.digest.outputs.digest != ''
-        uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
-        with:
-          subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
-          push-to-registry: true
-
+          files: |
+            ${{ inputs.bake_file }}
+            cwd://${{ steps.meta.outputs.bake-file }}
