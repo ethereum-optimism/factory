@@ -86,4 +86,5 @@ jobs:
             ${{ inputs.set }}
 
       - name: Print digest
-        run: echo ${{ steps.build.outputs.metadata }} | jq .${{ inputs.image_name }}.containerimage.digest
+        run: |
+          echo ${{ steps.build.outputs.metadata }} | jq .${{ inputs.image_name }}.containerimage.digest
