@@ -69,16 +69,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
       
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@8d8c7c12f7b958582a5cb82ba16d5903cb27976a # v5
-        with:
-          images: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=ref,event=tag
-      
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -94,8 +84,6 @@ jobs:
         with:
           targets: ${{ inputs.targets }}
           push: true
-          files: |
-            ${{ inputs.bake_file }}
-            cwd://${{ steps.meta.outputs.bake-file-tags }}
+          files: ${{ inputs.bake_file }}
           set: |
             ${{ inputs.set }}
