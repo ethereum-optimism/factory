@@ -85,9 +85,15 @@ jobs:
           set: |
             ${{ inputs.set }}
 
+      - name: Extract digest
+        id: digest
+        run: |
+          digest=$(echo '${{ steps.build.outputs.metadata }}' | jq -r '.["${{ inputs.image_name }}"].containerimage.digest')
+          echo "digest=$digest" >> $GITHUB_OUTPUT
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
-          subject-digest: ${{ fromJSON(steps.build.outputs.metadata)[inputs.image_name].containerimage.digest }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
