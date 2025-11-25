@@ -78,6 +78,18 @@ jobs:
       - name: Configure Docker for GCP Artifact Registry
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@8d8c7c12f7b958582a5cb82ba16d5903cb27976a # v5
+        with:
+          images: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
+          tags: |
+            type=sha
+            type=sha,format=long,prefix=
+            type=ref,event=branch
+            type=ref,event=tag
+            ${{ inputs.extraTags }}
+
       - name: Build and push image
         id: build
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
@@ -87,3 +99,4 @@ jobs:
           files: ${{ inputs.bake_file }}
           set: |
             ${{ inputs.set }}
+            *.tags=${{ steps.meta.outputs.tags }}
