@@ -96,7 +96,8 @@ jobs:
         with:
           targets: ${{ inputs.targets }}
           push: true
-          files: ${{ inputs.bake_file }}
+          files: |
+            ${{ inputs.bake_file }}
+            cwd://${{ steps.meta.outputs.bake-file }}
           set: |
             ${{ inputs.set }}
-            *.tags=${{ steps.meta.outputs.tags }}
