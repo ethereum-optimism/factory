@@ -91,7 +91,7 @@ jobs:
             ${{ inputs.extraTags }}
 
       - name: Print tags
-        run: cat cwd://${{ steps.meta.outputs.bake-file-tags }}
+        run: cat ${{ steps.meta.outputs.bake-file-tags }}
 
       # - name: Build and push image
       #   id: build
