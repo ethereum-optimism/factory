@@ -22,8 +22,8 @@ on:
         required: false
         type: string
         default: 'docker-bake.hcl'
-      targets:
-        description: 'Comma-separated list of bake targets to build'
+      target:
+        description: 'Bake target to build'
         required: false
         type: string
         default: ''
@@ -78,22 +78,16 @@ jobs:
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
           source: .
-          targets: ${{ inputs.targets }}
+          targets: ${{ inputs.target }}
           push: true
           files: |
             ${{ inputs.bake_file }}
           set: |
             ${{ inputs.set }}
 
-      - name: Extract digest
-        id: digest
-        run: |
-          digest=$(echo '${{ steps.build.outputs.metadata }}' | jq -r '.["${{ inputs.image_name }}"]["containerimage.digest"]')
-          echo "digest=$digest" >> $GITHUB_OUTPUT
-
       - name: Attest build provenance
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
+          subject-digest: ${{ fromJSON(steps.build.outputs.metadata)[inputs.target].digest }}
           push-to-registry: true
