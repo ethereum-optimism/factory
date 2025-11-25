@@ -40,6 +40,11 @@ on:
         description: 'Container registry URL (e.g., us-docker.pkg.dev/project/repo)'
         required: true
         type: string
+      set:
+        description: 'Variables to set (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -91,4 +96,6 @@ jobs:
           push: true
           files: |
             ${{ inputs.bake_file }}
-            cwd://${{ steps.meta.outputs.bake-file }}
+            ${{ steps.meta.outputs.bake-file }}
+          set: |
+            ${{ inputs.set }}
