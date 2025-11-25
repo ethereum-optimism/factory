@@ -85,6 +85,9 @@ jobs:
           set: |
             ${{ inputs.set }}
 
-      - name: Print digest
-        run: |
-          echo ${{ steps.build.outputs.metadata }} | jq .${{ inputs.image_name }}.containerimage.digest
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
+        with:
+          subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
+          subject-digest: ${{ fromJSON(steps.build.outputs.metadata)[inputs.image_name].containerimage.digest }}
+          push-to-registry: true
