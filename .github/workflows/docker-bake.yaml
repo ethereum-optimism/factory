@@ -84,3 +84,6 @@ jobs:
             ${{ inputs.bake_file }}
           set: |
             ${{ inputs.set }}
+
+      - name: Print build metadata
+        run: echo ${{ steps.build.outputs.metadata }}
