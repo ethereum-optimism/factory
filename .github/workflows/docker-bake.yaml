@@ -95,7 +95,6 @@ jobs:
           push: true
           files: ${{ inputs.bake_file }}
           set: |
-            # pushes image by digest, not tag
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
