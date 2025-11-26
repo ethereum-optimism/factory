@@ -100,8 +100,7 @@ jobs:
             ${{ inputs.set }}
 
       - name: Store build metadata in temporary file
-        run: |
-          echo '${{ steps.bake.outputs.metadata }}' | jq -c . > /tmp/${{ github.sha }}.json
+        run: echo "${{ steps.bake.outputs.metadata }}" > /tmp/${{ github.sha }}.json
 
       - name: Upload build metadata
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -154,8 +153,8 @@ jobs:
           # Extract digests from metadata JSON files
           digests=""
           for json_file in /tmp/${{ github.sha }}*.json; do
-            digest=$(jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
-            digests="$digests ${{ inputs.gcp_registry }}/${{ inputs.image_name }}@$digest"
+            digest=$(jq -c -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
+            digests="$digests $digest"
           done
           
           # Create manifest from digests
