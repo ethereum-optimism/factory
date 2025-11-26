@@ -93,9 +93,10 @@ jobs:
           push: true
           files: ${{ inputs.bake_file }}
           set: |
-            *.tags=${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }}-${{ matrix.platform }}
-            *.platforms=${{ matrix.platform }}
+            ${{ inputs.target }}.tags=${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }}-${{ matrix.platform }}
+            ${{ inputs.target }}.platforms=${{ matrix.platform }}
             ${{ inputs.set }}
+        # TODO: ideally I would push with a digest, not a tag. And then pass the digests to the attest job.
 
   attest:
     needs: bake
