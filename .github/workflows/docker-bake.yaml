@@ -111,6 +111,7 @@ jobs:
           retention-days: 1
       
   attest:
+    name: Attest multi-arch manifest
     needs: bake
     runs-on: ubuntu-24.04
     permissions:
