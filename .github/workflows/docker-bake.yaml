@@ -151,18 +151,20 @@ jobs:
       - name: Create multi-arch manifest
         id: merge
         run: |
-          # Extract digests from metadata JSON files
-          digests=""
+          IMAGE_NAME="${{ inputs.gcp_registry }}/${{ inputs.image_name }}"
+          
+          # Extract digests from metadata JSON files and build full references
+          digest_refs=""
           for json_file in /tmp/${{ github.sha }}*.json; do
-            digest=$(jq -c -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
-            digests="$digests $digest"
+            digest=$(jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
+            digest_refs="$digest_refs ${IMAGE_NAME}@$digest"
           done
           
           # Create manifest from digests
           docker buildx imagetools create \
-            -t ${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }} \
-            -t ${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ inputs.tag }} \
-            $digests
+            -t ${IMAGE_NAME}:${{ github.sha }} \
+            -t ${IMAGE_NAME}:${{ inputs.tag }} \
+            $digest_refs
           
           # Get the multi-arch manifest digest
           manifest_digest=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }} --format '{{.Manifest.Digest}}')
