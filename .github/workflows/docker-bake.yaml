@@ -40,10 +40,15 @@ on:
         required: false
         type: string
         default: ''
+      runs_on:
+        description: 'Runner to use (e.g., ubuntu-24.04, ubuntu-24.04-arm)'
+        required: false
+        type: string
+        default: 'ubuntu-24.04'
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runs_on }}
     permissions:
       contents: read
       id-token: write
