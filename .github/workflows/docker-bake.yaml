@@ -1,4 +1,6 @@
-name: Build with Docker Bake (Reusable)
+name: Bake + Attest
+# Only works in public repos
+# ubuntu-24.04-arm is only available in public repositories
 
 on:
   workflow_call:
@@ -11,11 +13,6 @@ on:
         description: 'Build context path'
         required: false
         default: '.'
-        type: string
-      platforms:
-        description: 'Comma-separated list of platforms (e.g., linux/amd64,linux/arm64)'
-        default: 'linux/amd64,linux/arm64'
-        required: false
         type: string
       bake_file:
         description: 'Path to docker-bake.hcl or docker-compose.yml file'
@@ -40,24 +37,31 @@ on:
         required: false
         type: string
         default: ''
-      runs_on:
-        description: 'Runner to use (e.g., ubuntu-24.04, ubuntu-24.04-arm)'
-        required: false
-        type: string
-        default: 'ubuntu-24.04'
       git_version:
         description: 'GIT_VERSION to set as environment variable for bake'
         required: false
         type: string
         default: ''
+      tag:
+        description: 'Docker tag for the final image'
+        required: false
+        type: string
+        default: ''
 
 jobs:
-  build:
-    runs-on: ${{ inputs.runs_on }}
+  bake:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - platform: linux/amd64
+          runner: ubuntu-latest
+        - platform: linux/arm64
+          runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       id-token: write
-      attestations: write
     
     steps:
       - name: harden-runner
@@ -68,9 +72,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
       
@@ -83,47 +84,65 @@ jobs:
       - name: Configure Docker for GCP Artifact Registry
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Build and push image
-        id: build
+      - name: Bake architecture specific image
         env:
           GIT_VERSION: ${{ inputs.git_version }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
-          source: .
           targets: ${{ inputs.target }}
           push: true
-          files: |
-            ${{ inputs.bake_file }}
+          files: ${{ inputs.bake_file }}
           set: |
+            *.tags=${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }}-${{ matrix.platform }}
+            *.platforms=${{ matrix.platform }}
             ${{ inputs.set }}
 
-      - name: Extract digest
-        id: digest
-        run: |
-          echo '${{ steps.build.outputs.metadata }}' | jq .
-          digest=$(echo '${{ steps.build.outputs.metadata }}' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]')
-          echo "digest=$digest" >> $GITHUB_OUTPUT
+  attest:
+    needs: bake
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: harden-runner
+        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+        with:
+          egress-policy: audit
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
 
-      # reauthentication is necessary because
-      # 1. the actions/attest-build-provenance does not use the gcloud cred helper
-      # 2. the first google-github-actions/auth outputs.auth_token may have expired (5 minutes lifetime)
-      - run: rm ~/.docker/config.json
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+
       - name: Login to Artifact Registry
         uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
         with:
           registry: ${{ inputs.gcp_registry }}
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.auth_token }}
+
+      - name: Create multi-arch manifest & get digest
+        id: merge
+        run: |
+          docker buildx imagetools create \
+            -t us-docker.pkg.dev/oplabs-tools-artifacts/oss/${{ inputs.image_name }}:${{ github.sha }} \
+            -t us-docker.pkg.dev/oplabs-tools-artifacts/oss/${{ inputs.image_name }}:${{ inputs.tag }} \
+            us-docker.pkg.dev/oplabs-tools-artifacts/oss/${{ inputs.image_name }}:${{ github.sha }}-amd64 \
+            us-docker.pkg.dev/oplabs-tools-artifacts/oss/${{ inputs.image_name }}:${{ github.sha }}-arm64
+          
+          # Get the multi arch manifest digest
+          digest=$(docker buildx imagetools inspect us-docker.pkg.dev/oplabs-tools-artifacts/oss/${{ inputs.image_name }}:${{ github.sha }} --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> $GITHUB_OUTPUT
+          echo "Multi Arch Manifest digest: $digest"
     
       - name: Attest build provenance
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.gcp_registry }}/${{ inputs.image_name }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
+          subject-digest: ${{ steps.merge.outputs.digest }}
           push-to-registry: true
