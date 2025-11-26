@@ -87,6 +87,7 @@ jobs:
       - name: Bake architecture specific image
         env:
           GIT_VERSION: ${{ inputs.git_version }}
+          PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
           targets: ${{ inputs.target }}
@@ -94,7 +95,6 @@ jobs:
           files: ${{ inputs.bake_file }}
           set: |
             ${{ inputs.target }}.tags=${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }}-${{ matrix.platform }}
-            ${{ inputs.target }}.platforms=${{ matrix.platform }}
             ${{ inputs.set }}
         # TODO: ideally I would push with a digest, not a tag. And then pass the digests to the attest job.
 
