@@ -62,8 +62,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    outputs:
-      digest: ${{ steps.bake.outputs.metadata[0].digest }}
     
     steps:
       - name: harden-runner
@@ -100,6 +98,17 @@ jobs:
             # pushes image by digest, not tag
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
+
+      - name: Store build metadata in temporary file
+        run: echo "${{ steps.bake.outputs.metadata }}" > /tmp/${{ github.sha }}.json
+
+      - name: Upload build metadata
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ${{ github.sha }}-${{ matrix.platform }}
+          path: /tmp/${{ github.sha }}.json
+          if-no-files-found: error
+          retention-days: 1
       
   attest:
     needs: bake
@@ -131,25 +140,32 @@ jobs:
           password: ${{ steps.auth.outputs.auth_token }}
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v6
         with:
-          path: /tmp/digests
-          pattern: digests-${{ github.sha }}-*
+          path: /tmp/
+          pattern: ${{ github.sha }}-*
           merge-multiple: true
 
-      - name: Create multi-arch manifest & get digest
+      - name: Create multi-arch manifest
         id: merge
-        working-directory: /tmp/digests
         run: |
+          # Extract digests from metadata JSON files
+          digests=""
+          for json_file in /tmp/${{ github.sha }}*.json; do
+            digest=$(jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
+            digests="$digests ${{ inputs.gcp_registry }}/${{ inputs.image_name }}@$digest"
+          done
+          
+          # Create manifest from digests
           docker buildx imagetools create \
             -t ${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }} \
             -t ${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ inputs.tag }} \
-            $(printf '${{ inputs.gcp_registry }}/${{ inputs.image_name }}@sha256:%s ' *)
+            $digests
           
           # Get the multi-arch manifest digest
-          digest=$(docker buildx imagetools inspect ${{ inputs.gcp_registry }}/${{ inputs.image_name }}:${{ github.sha }} --format '{{.Manifest.Digest}}')
-          echo "digest=$digest" >> $GITHUB_OUTPUT
-          echo "Multi-arch manifest digest: $digest"
+          manifest_digest=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }} --format '{{.Manifest.Digest}}')
+          echo "digest=$manifest_digest" >> $GITHUB_OUTPUT
+          echo "Multi-arch manifest digest: $manifest_digest"
     
       - name: Attest build provenance
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
