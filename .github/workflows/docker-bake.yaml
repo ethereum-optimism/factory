@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: 'ubuntu-24.04'
+      git_version:
+        description: 'GIT_VERSION to set as environment variable for bake'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -80,6 +85,8 @@ jobs:
 
       - name: Build and push image
         id: build
+        env:
+          GIT_VERSION: ${{ inputs.git_version }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
           source: .
