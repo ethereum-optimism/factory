@@ -105,7 +105,7 @@ jobs:
       - name: Upload build metadata
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: ${{ github.sha }}-${{ github.job }}
+          name: ${{ github.sha }}-${{ strategy.job-index }}
           path: /tmp/${{ github.sha }}.json
           if-no-files-found: error
           retention-days: 1
