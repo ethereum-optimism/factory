@@ -100,7 +100,7 @@ jobs:
             ${{ inputs.set }}
 
       - name: Store build metadata in temporary file
-        run: echo "${{ steps.bake.outputs.metadata }}" > /tmp/${{ github.sha }}.json
+        run: echo '${{ toJSON(steps.bake.outputs.metadata) }}' > /tmp/${{ github.sha }}.json
 
       - name: Upload build metadata
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
