@@ -101,11 +101,12 @@ jobs:
           targets: ${{ inputs.target }}
           push: true
           files: ${{ inputs.bake_file }}
+          provenance: mode=max
           set: |
             *.tags=
             *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
             *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope=${{ inputs.image_name }}-${{ matrix.platform }}') || '' }}
-            *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true,provenance=false
+            *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
       - name: Store build metadata in temporary file
