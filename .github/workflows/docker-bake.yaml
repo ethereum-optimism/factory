@@ -121,7 +121,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}-digest
+          name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
           path: /tmp/${{ github.sha }}-digest.txt
           if-no-files-found: error
           retention-days: 1
@@ -160,7 +160,7 @@ jobs:
         uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v4
         with:
           path: /tmp/digests
-          pattern: ${{ inputs.image_name }}-${{ github.sha }}-*-digest
+          pattern: ${{ inputs.image_name }}-${{ github.sha }}-*
           merge-multiple: true
 
       - name: Create multi-arch manifest
