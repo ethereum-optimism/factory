@@ -9,11 +9,6 @@ on:
         description: 'Image name (e.g., gateway-backend)'
         required: true
         type: string
-      context:
-        description: 'Build context path'
-        required: false
-        default: '.'
-        type: string
       bake_file:
         description: 'Path to docker-bake.hcl or docker-compose.yml file'
         required: false
@@ -37,11 +32,6 @@ on:
         required: false
         type: string
         default: ''
-      git_version:
-        description: 'GIT_VERSION to set as environment variable for bake'
-        required: false
-        type: string
-        default: ''
       tag:
         description: 'Docker tag for the final image'
         required: false
@@ -52,6 +42,11 @@ on:
         required: false
         type: string
         default: ''
+      use_arm_runners:
+        description: 'Use native ARM runners (only works in public repos)'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   bake:
@@ -60,7 +55,7 @@ jobs:
       matrix:
         include:
         - platform: linux/amd64
-          runner: ubuntu-latest
+          runner: ubuntu-24.04
         - platform: linux/arm64
           runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -108,7 +103,7 @@ jobs:
           set: |
             *.tags=
             *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
-            *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
+            *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope=${{ inputs.image_name }}-${{ matrix.platform }}') || '' }}
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
