@@ -1,6 +1,7 @@
 name: Bake + Attest
-# Only works in public repos
-# ubuntu-24.04-arm is only available in public repositories
+# Supports both public and private repos
+# Public repos: uses ubuntu-24.04-arm for native ARM builds (faster)
+# Private repos: uses ubuntu-latest with QEMU for ARM (set use_arm_runners: false)
 
 on:
   workflow_call:
