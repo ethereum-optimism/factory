@@ -47,6 +47,11 @@ on:
         required: false
         type: string
         default: ''
+      env:
+        description: 'Environment variables for bake (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   bake:
@@ -84,10 +89,18 @@ jobs:
       - name: Configure Docker for GCP Artifact Registry
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
+      - name: Set environment variables for bake
+        run: |
+          # Export env vars from multiline input
+          while IFS= read -r line; do
+            if [ -n "$line" ] && [[ "$line" == *"="* ]]; then
+              echo "$line" >> $GITHUB_ENV
+            fi
+          done <<< "${{ inputs.env }}"
+
       - name: Bake architecture specific image
         id: bake
         env:
-          GIT_VERSION: ${{ inputs.git_version }}
           PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
