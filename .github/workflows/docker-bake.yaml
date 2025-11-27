@@ -90,13 +90,11 @@ jobs:
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
       - name: Set environment variables for bake
+        if: inputs.env != ''
         run: |
-          # Export env vars from multiline input
-          while IFS= read -r line; do
-            if [ -n "$line" ] && [[ "$line" == *"="* ]]; then
-              echo "$line" >> $GITHUB_ENV
-            fi
-          done <<< "${{ inputs.env }}"
+          cat >> $GITHUB_ENV << 'EOF'
+          ${{ inputs.env }}
+          EOF
 
       - name: Bake architecture specific image
         id: bake
