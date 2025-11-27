@@ -113,15 +113,16 @@ jobs:
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
-      - name: Store build metadata in temporary file
+      - name: Extract digest from metadata
         run: |
-          echo '${{ steps.bake.outputs.metadata }}' | jq '.' > /tmp/${{ github.sha }}.json
+          echo '${{ steps.bake.outputs.metadata }}' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > /tmp/${{ github.sha }}-digest.txt
+          cat /tmp/${{ github.sha }}-digest.txt
 
-      - name: Upload build metadata
+      - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
-          path: /tmp/${{ github.sha }}.json
+          name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}-digest
+          path: /tmp/${{ github.sha }}-digest.txt
           if-no-files-found: error
           retention-days: 1
       
@@ -158,8 +159,8 @@ jobs:
       - name: Download digests
         uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v4
         with:
-          path: /tmp/
-          pattern: ${{ inputs.image_name }}-${{ github.sha }}-*
+          path: /tmp/digests
+          pattern: ${{ inputs.image_name }}-${{ github.sha }}-*-digest
           merge-multiple: true
 
       - name: Create multi-arch manifest
@@ -167,10 +168,10 @@ jobs:
         run: |
           IMAGE_NAME="${{ inputs.gcp_registry }}/${{ inputs.image_name }}"
           
-          # Extract digests from metadata JSON files and build full references
+          # Read digests from text files and build full references
           digest_refs=""
-          for json_file in /tmp/${{ github.sha }}*.json; do
-            digest=$(jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$json_file")
+          for digest_file in /tmp/digests/*-digest.txt; do
+            digest=$(cat "$digest_file")
             digest_refs="$digest_refs ${IMAGE_NAME}@$digest"
           done
           
