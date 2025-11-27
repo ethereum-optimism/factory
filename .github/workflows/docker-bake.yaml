@@ -106,7 +106,7 @@ jobs:
       - name: Upload build metadata
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: ${{ github.sha }}-${{ strategy.job-index }}
+          name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
           path: /tmp/${{ github.sha }}.json
           if-no-files-found: error
           retention-days: 1
@@ -142,10 +142,10 @@ jobs:
           password: ${{ steps.auth.outputs.auth_token }}
 
       - name: Download digests
-        uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v6
+        uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v4
         with:
           path: /tmp/
-          pattern: ${{ github.sha }}-*
+          pattern: ${{ inputs.image_name }}-${{ github.sha }}-*
           merge-multiple: true
 
       - name: Create multi-arch manifest
