@@ -107,6 +107,8 @@ jobs:
           files: ${{ inputs.bake_file }}
           set: |
             *.tags=
+            *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
+            *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.gcp_registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
