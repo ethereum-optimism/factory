@@ -167,7 +167,7 @@ jobs:
             $digest_refs
           
           # Get the multi-arch manifest digest
-          manifest_digest=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }} --format '{{.digest}}')
+          manifest_digest=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }} | grep 'Digest:' | head -1 | awk '{print $2}')
           echo "digest=$manifest_digest" >> $GITHUB_OUTPUT
           echo "Multi-arch manifest digest: $manifest_digest"
     
