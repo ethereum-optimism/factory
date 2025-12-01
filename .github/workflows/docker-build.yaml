@@ -42,7 +42,7 @@ on:
         description: 'Docker tag for the final image'
         required: false
         type: string
-        default: ''
+        default: ${{ github.ref_name }}
       use_arm_runners:
         description: 'Use native ARM runners (only works in public repos)'
         required: false
