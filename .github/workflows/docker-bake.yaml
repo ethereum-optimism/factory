@@ -122,19 +122,19 @@ jobs:
 
       - name: Extract digest from metadata
         run: |
-          echo '${{ steps.bake.outputs.metadata }}' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > /tmp/${{ github.sha }}-digest.txt
-          cat /tmp/${{ github.sha }}-digest.txt
+          echo '${{ steps.bake.outputs.metadata }}' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
+          cat /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
 
       - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
-          path: /tmp/${{ github.sha }}-digest.txt
+          path: /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
           if-no-files-found: error
           retention-days: 1
       
-  attest:
-    name: Attest multi-arch manifest
+  merge:
+    name: merge multi-arch manifest & attest it
     needs: bake
     runs-on: ubuntu-24.04
     permissions:
@@ -179,7 +179,7 @@ jobs:
           
           # Read digests from text files and build full references
           digest_refs=""
-          for digest_file in /tmp/digests/*-digest.txt; do
+          for digest_file in /tmp/digests/*.txt; do
             digest=$(cat "$digest_file")
             digest_refs="$digest_refs ${IMAGE_NAME}@$digest"
           done
