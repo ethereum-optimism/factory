@@ -48,6 +48,11 @@ on:
         required: false
         type: boolean
         default: true
+      push_provenance:
+        description: 'Push provenance to registry'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   bake:
@@ -195,4 +200,4 @@ jobs:
         with:
           subject-name: ${{ inputs.registry }}/${{ inputs.image_name }}
           subject-digest: ${{ steps.merge.outputs.digest }}
-          push-to-registry: true
+          push-to-registry: ${{ inputs.push_provenance }}
