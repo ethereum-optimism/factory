@@ -55,6 +55,15 @@ on:
         default: true
 
 jobs:
+  sanitize:
+    runs-on: ubuntu-latest
+    outputs:
+      sanitized_ref_name: ${{ steps.sanitize.outputs.ref_name }}
+    steps:
+      - name: Sanitize ref_name
+        id: sanitize
+        run: echo "ref_name=$(echo ${{ github.ref_name }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
+
   build:
     strategy:
       fail-fast: true
@@ -126,7 +135,7 @@ jobs:
       
   merge:
     name: merge multi-arch manifest & attest it
-    needs: build
+    needs: [build, sanitize]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -178,7 +187,7 @@ jobs:
           # Create manifest from digests
           docker buildx imagetools create \
             -t ${IMAGE_NAME}:${{ github.sha }} \
-            -t ${IMAGE_NAME}:${{ inputs.tag }} \
+            -t ${IMAGE_NAME}:${{ needs.sanitize.outputs.sanitized_ref_name }} \
             $digest_refs
           
           # Get the multi-arch manifest digest
