@@ -48,8 +48,8 @@ on:
         required: false
         type: boolean
         default: true
-      push_provenance:
-        description: 'Push provenance to registry'
+      attest:
+        description: 'Attest build provenance and push to registry'
         required: false
         type: boolean
         default: true
@@ -196,8 +196,9 @@ jobs:
           echo "Multi-arch manifest digest: $manifest_digest"
     
       - name: Attest build provenance
+        if: inputs.attest
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.registry }}/${{ inputs.image_name }}
           subject-digest: ${{ steps.merge.outputs.digest }}
-          push-to-registry: ${{ inputs.push_provenance }}
+          push-to-registry: true
