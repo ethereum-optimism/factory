@@ -53,12 +53,12 @@ jobs:
   prep:
     runs-on: ubuntu-latest
     outputs:
-      sanitized_ref_name: ${{ steps.sanitize.outputs.ref_name }}
+      sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
       is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
     steps:
-      - name: Sanitize ref_name
+      - name: Sanitize tag
         id: sanitize
-        run: echo "ref_name=$(echo ${{ github.ref_name }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
+        run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
       - name: check if we are in a fork PR
         id: fork-check
         run: |
@@ -185,7 +185,7 @@ jobs:
           # Create manifest from digests
           docker buildx imagetools create \
             -t ${IMAGE_NAME}:${{ github.sha }} \
-            -t ${IMAGE_NAME}:${{ needs.prep.outputs.sanitized_ref_name }} \
+            -t ${IMAGE_NAME}:${{ needs.prep.outputs.sanitized_tag }} \
             $digest_refs
           
           # Get the multi-arch manifest digest
