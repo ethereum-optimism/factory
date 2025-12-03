@@ -109,7 +109,7 @@ jobs:
         id: build
         uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
         with:
-          context: "{{defaultContext}}:${{ inputs.context }}"
+          context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           target: ${{ inputs.target }}
           platforms: ${{ matrix.platform }}
