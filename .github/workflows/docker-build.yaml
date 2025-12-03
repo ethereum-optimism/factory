@@ -116,8 +116,8 @@ jobs:
           push: true
           provenance: mode=max
           build-args: ${{ inputs.build_args }}
-          cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
-          cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
+          # cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
+          # cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
           outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
 
       - name: Extract digest from metadata
