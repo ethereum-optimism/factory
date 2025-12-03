@@ -1,0 +1,28 @@
+name: 'Parse Tag'
+description: 'Parse app-specific tags like app/v1.2.3 into image_name and version'
+
+outputs:
+  image_name:
+    description: 'The image name parsed from the tag prefix'
+    value: ${{ steps.parse.outputs.image_name }}
+  version:
+    description: 'The version parsed from the tag suffix'
+    value: ${{ steps.parse.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+      with:
+        egress-policy: audit
+    - name: parse image name and version tag
+      id: parse
+      shell: bash
+      run: |
+        TAG=${GITHUB_REF#refs/tags/}
+        IMAGE_NAME=${TAG%%/*}
+        VERSION=${TAG#*/}
+        echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Parsed tag: $TAG -> image: $IMAGE_NAME, version: $VERSION"
+
