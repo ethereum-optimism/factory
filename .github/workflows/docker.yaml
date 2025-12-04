@@ -40,6 +40,11 @@ on:
         required: false
         type: boolean
         default: true
+      env:
+        description: 'Environment variables to set before build (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
 
       # === Build mode inputs ===
       context:
@@ -70,13 +75,6 @@ on:
         type: string
         default: ''
 
-      # === Optional ===
-      env:
-        description: 'Environment variables to set before build (KEY=VALUE format, one per line)'
-        required: false
-        type: string
-        default: ''
-
 jobs:
   prep:
     runs-on: ubuntu-latest
@@ -84,6 +82,7 @@ jobs:
       sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
       is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
     steps:
+      - uses: ./actions/harden
       - name: Sanitize tag
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
@@ -109,32 +108,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     
     steps:
-      - name: harden-runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+      - uses: ./actions/harden
+      - uses: ./actions/docker-setup
         with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
-
-      - name: Set up QEMU
-        if: ${{ !inputs.use_arm_runners }}
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
-      
-      - name: Authenticate to Google Cloud
-        if: inputs.gcp_project_id != '' && needs.prep.outputs.is_fork_pr == 'false'
-        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
+          use_qemu: ${{ !inputs.use_arm_runners }}
+      - uses: ./actions/gcp-docker-auth
+        if: needs.prep.outputs.is_fork_pr == 'false'
         with:
-          project_id: ${{ inputs.gcp_project_id }}
-          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
-          create_credentials_file: true
-
-      - name: Configure Docker for GCP Artifact Registry
-        if: inputs.gcp_project_id != '' && needs.prep.outputs.is_fork_pr == 'false'
-        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+          gcp_project_id: ${{ inputs.gcp_project_id }}
 
       - name: Set environment variables
         if: inputs.env != ''
@@ -160,12 +141,6 @@ jobs:
           cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
           outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
 
-      - name: Extract digest (build mode)
-        if: inputs.mode == 'build'
-        run: |
-          echo '${{ steps.build.outputs.digest }}' > /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
-          cat /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
-
       # === Bake mode ===
       - name: Build image (bake mode)
         if: inputs.mode == 'bake'
@@ -185,21 +160,15 @@ jobs:
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
-      - name: Extract digest (bake mode)
-        if: inputs.mode == 'bake'
-        run: |
-          PREFIX=/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
-          METADATA_FILE=$PREFIX-metadata.json
-          OUTPUT_FILE=$PREFIX.txt
-          # Use quoted heredoc to safely write metadata without bash expansion
-          # This prevents issues with special characters like ! triggering history expansion
-          cat <<'METADATA_EOF' > $METADATA_FILE
-          ${{ steps.bake.outputs.metadata }}
-          METADATA_EOF
-          cat $METADATA_FILE | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > $OUTPUT_FILE
-          cat $OUTPUT_FILE
-
       # === Common ===
+      - uses: ./actions/extract-docker-digest
+        with:
+          mode: ${{ inputs.mode }}
+          build_digest: ${{ steps.build.outputs.digest }}
+          bake_metadata: ${{ steps.bake.outputs.metadata }}
+          bake_target: ${{ inputs.target }}
+          output_file: /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
+
       - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -209,33 +178,18 @@ jobs:
           retention-days: 1
       
   merge:
-    name: merge multi-arch manifest & attest it
+    name: merge multi-arch manifest
     needs: [prep, build]
     runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
     steps:
-      - name: harden-runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+      - uses: ./actions/harden
+      - uses: ./actions/docker-setup
+      - uses: ./actions/gcp-docker-auth
+        if: needs.prep.outputs.is_fork_pr == 'false'
         with:
-          egress-policy: audit
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
-
-      - name: Authenticate to Google Cloud
-        if: inputs.gcp_project_id != '' && needs.prep.outputs.is_fork_pr == 'false'
-        id: auth
-        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
-        with:
-          project_id: ${{ inputs.gcp_project_id }}
-          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
-
-      - name: Login to GCP Artifact Registry
-        if: inputs.gcp_project_id != '' && needs.prep.outputs.is_fork_pr == 'false'
-        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
-        with:
-          registry: ${{ inputs.registry }}
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.auth_token }}
+          gcp_project_id: ${{ inputs.gcp_project_id }}
 
       - name: Download digests
         uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v4
@@ -244,34 +198,28 @@ jobs:
           pattern: ${{ inputs.image_name }}-${{ github.sha }}-*
           merge-multiple: true
 
-      - name: Create multi-arch manifest
+      - uses: ./actions/merge-multi-arch-docker-images
         id: merge
-        run: |
-          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image_name }}"
-          
-          # Read digests from text files and build full references
-          digest_refs=""
-          for digest_file in /tmp/digests/*.txt; do
-            digest=$(cat "$digest_file")
-            digest_refs="$digest_refs ${IMAGE_NAME}@$digest"
-          done
-          
-          # Create manifest from digests
-          docker buildx imagetools create \
-            -t ${IMAGE_NAME}:${{ github.sha }} \
-            -t ${IMAGE_NAME}:${{ needs.prep.outputs.sanitized_tag }} \
-            $digest_refs
-          
-          # Get the multi-arch manifest digest
-          manifest_digest=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }} | grep 'Digest:' | head -1 | awk '{print $2}')
-          echo "digest=$manifest_digest" >> $GITHUB_OUTPUT
-          echo "Multi-arch manifest digest: $manifest_digest"
-    
+        with:
+          registry: ${{ inputs.registry }}
+          image_name: ${{ inputs.image_name }}
+          tag: ${{ needs.prep.outputs.sanitized_tag }}
+
+  attest:
+    name: attest build provenance
+    needs: [prep, build,merge]
+    if: needs.prep.outputs.is_fork_pr == 'false'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./actions/harden
+      - uses: ./actions/docker-setup
+      - uses: ./actions/gcp-docker-auth
+        with:
+          gcp_project_id: ${{ inputs.gcp_project_id }}
+
       - name: Attest build provenance
-        if: needs.prep.outputs.is_fork_pr == 'false'
         uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
         with:
           subject-name: ${{ inputs.registry }}/${{ inputs.image_name }}
-          subject-digest: ${{ steps.merge.outputs.digest }}
+          subject-digest: ${{ needs.merge.outputs.digest }}
           push-to-registry: true
-
