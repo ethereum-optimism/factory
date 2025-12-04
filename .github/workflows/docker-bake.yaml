@@ -122,18 +122,15 @@ jobs:
 
       - name: Extract digest from metadata
         run: |
-          PREFIX=/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
-          METADATA_FILE=$PREFIX-metadata.json
-          OUTPUT_FILE=$PREFIX.txt
+          OUTPUT_FILE=/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
 
           # Safely write the GitHub step output to a temporary file
           #
           # The quotes around the delimiter ensure that no variables will be expanded
-          cat <<'pseudosafedelimiter330a01c490aca151604b8cf639adc76d48f6c5d4' > $METADATA_FILE
+          cat <<'pseudosafedelimiter330a01c490aca151604b8cf639adc76d48f6c5d4' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > $OUTPUT_FILE
           ${{ steps.bake.outputs.metadata }}
           pseudosafedelimiter330a01c490aca151604b8cf639adc76d48f6c5d4
           
-          cat $METADATA_FILE | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > $OUTPUT_FILE
           cat $OUTPUT_FILE
 
       - name: Upload digest
