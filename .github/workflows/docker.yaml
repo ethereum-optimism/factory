@@ -76,13 +76,13 @@ on:
         default: ''
 
 jobs:
-  prep:
+  safety-checklist:
     runs-on: ubuntu-latest
     outputs:
       sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
       is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
     steps:
-      - uses: ./actions/harden
+      - uses: ethereum-optimism/factory/actions/harden@0b4865a088da152dbd9db2796aec851fb60aef06
       - name: Sanitize tag
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
@@ -96,7 +96,7 @@ jobs:
           fi
 
   build:
-    needs: prep
+    needs: safety-checklist
     strategy:
       fail-fast: true
       matrix:
@@ -108,12 +108,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     
     steps:
-      - uses: ./actions/harden
-      - uses: ./actions/docker-setup
+      - uses: ethereum-optimism/factory/actions/harden@0b4865a088da152dbd9db2796aec851fb60aef06
+      - uses: ethereum-optimism/factory/actions/docker-setup@0b4865a088da152dbd9db2796aec851fb60aef06
         with:
           use_qemu: ${{ !inputs.use_arm_runners }}
-      - uses: ./actions/gcp-docker-auth
-        if: needs.prep.outputs.is_fork_pr == 'false'
+      - uses: ethereum-optimism/factory/actions/gcp-docker-auth@0b4865a088da152dbd9db2796aec851fb60aef06
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
         with:
           gcp_project_id: ${{ inputs.gcp_project_id }}
 
@@ -161,7 +161,7 @@ jobs:
             ${{ inputs.set }}
 
       # === Common ===
-      - uses: ./actions/extract-docker-digest
+      - uses: ethereum-optimism/factory/actions/extract-docker-digest@0b4865a088da152dbd9db2796aec851fb60aef06
         with:
           mode: ${{ inputs.mode }}
           build_digest: ${{ steps.build.outputs.digest }}
@@ -179,15 +179,15 @@ jobs:
       
   merge:
     name: merge multi-arch manifest
-    needs: [prep, build]
+    needs: [safety-checklist, build]
     runs-on: ubuntu-24.04
     outputs:
       digest: ${{ steps.merge.outputs.digest }}
     steps:
-      - uses: ./actions/harden
-      - uses: ./actions/docker-setup
-      - uses: ./actions/gcp-docker-auth
-        if: needs.prep.outputs.is_fork_pr == 'false'
+      - uses: ethereum-optimism/factory/actions/harden@0b4865a088da152dbd9db2796aec851fb60aef06
+      - uses: ethereum-optimism/factory/actions/docker-setup@0b4865a088da152dbd9db2796aec851fb60aef06
+      - uses: ethereum-optimism/factory/actions/gcp-docker-auth@0b4865a088da152dbd9db2796aec851fb60aef06
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
         with:
           gcp_project_id: ${{ inputs.gcp_project_id }}
 
@@ -198,22 +198,22 @@ jobs:
           pattern: ${{ inputs.image_name }}-${{ github.sha }}-*
           merge-multiple: true
 
-      - uses: ./actions/merge-multi-arch-docker-images
+      - uses: ethereum-optimism/factory/actions/merge-multi-arch-docker-images@0b4865a088da152dbd9db2796aec851fb60aef06
         id: merge
         with:
           registry: ${{ inputs.registry }}
           image_name: ${{ inputs.image_name }}
-          tag: ${{ needs.prep.outputs.sanitized_tag }}
+          tag: ${{ needs.safety-checklist.outputs.sanitized_tag }}
 
   attest:
     name: attest build provenance
-    needs: [prep, build,merge]
-    if: needs.prep.outputs.is_fork_pr == 'false'
+    needs: [safety-checklist, build, merge]
+    if: needs.safety-checklist.outputs.is_fork_pr == 'false'
     runs-on: ubuntu-24.04
     steps:
-      - uses: ./actions/harden
-      - uses: ./actions/docker-setup
-      - uses: ./actions/gcp-docker-auth
+      - uses: ethereum-optimism/factory/actions/harden@0b4865a088da152dbd9db2796aec851fb60aef06
+      - uses: ethereum-optimism/factory/actions/docker-setup@0b4865a088da152dbd9db2796aec851fb60aef06
+      - uses: ethereum-optimism/factory/actions/gcp-docker-auth@0b4865a088da152dbd9db2796aec851fb60aef06
         with:
           gcp_project_id: ${{ inputs.gcp_project_id }}
 
