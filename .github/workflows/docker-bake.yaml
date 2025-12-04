@@ -122,8 +122,16 @@ jobs:
 
       - name: Extract digest from metadata
         run: |
-          echo '${{ steps.bake.outputs.metadata }}' | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
-          cat /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
+          PREFIX=/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
+          METADATA_FILE=$PREFIX-metadata.json
+          OUTPUT_FILE=$PREFIX.txt
+          # Use quoted heredoc to safely write metadata without bash expansion
+          # This prevents issues with special characters like ! triggering history expansion
+          cat <<'METADATA_EOF' > $METADATA_FILE
+          ${{ steps.bake.outputs.metadata }}
+          METADATA_EOF
+          cat $METADATA_FILE | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > $OUTPUT_FILE
+          cat $OUTPUT_FILE
 
       - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
