@@ -1,4 +1,5 @@
-name: Bake + Attest
+name: Docker Build (Reusable)
+# Supports both docker build and docker bake modes
 # Supports both public and private repos
 # Public repos: uses ubuntu-24.04-arm for native ARM builds (faster)
 # Private repos: uses ubuntu-latest with QEMU for ARM (set use_arm_runners: false)
@@ -6,6 +7,12 @@ name: Bake + Attest
 on:
   workflow_call:
     inputs:
+      # === Common inputs ===
+      mode:
+        description: 'Build mode: "build" for Dockerfile, "bake" for docker-bake.hcl'
+        required: false
+        type: string
+        default: 'build'
       registry:
         description: 'Container registry URL (e.g., us-docker.pkg.dev/project/repo)'
         required: true
@@ -14,13 +21,8 @@ on:
         description: 'Image name (e.g., gateway-backend)'
         required: true
         type: string
-      bake_file:
-        description: 'Path to docker-bake.hcl or docker-compose.yml file'
-        required: false
-        type: string
-        default: 'docker-bake.hcl'
       target:
-        description: 'Bake target to build'
+        description: 'Docker build target (for multi-stage Dockerfiles) or bake target'
         required: false
         type: string
         default: ''
@@ -28,26 +30,52 @@ on:
         description: 'GCP Project ID'
         required: false
         type: string
-      set:
-        description: 'Variables to set (KEY=VALUE format, one per line)'
-        required: false
-        type: string
-        default: ''
       tag:
         description: 'Docker tag for the final image'
         required: false
         type: string
-        default: ''
-      env:
-        description: 'Environment variables for bake (KEY=VALUE format, one per line)'
-        required: false
-        type: string
-        default: ''
+        default: ${{ github.ref_name }}
       use_arm_runners:
         description: 'Use native ARM runners (only works in public repos)'
         required: false
         type: boolean
         default: true
+
+      # === Build mode inputs ===
+      context:
+        description: '[build mode] Build context path'
+        required: false
+        default: '.'
+        type: string
+      dockerfile:
+        description: '[build mode] Path to Dockerfile relative to context'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      build_args:
+        description: '[build mode] Build arguments as multiline string (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
+
+      # === Bake mode inputs ===
+      bake_file:
+        description: '[bake mode] Path to docker-bake.hcl or docker-compose.yml file'
+        required: false
+        type: string
+        default: 'docker-bake.hcl'
+      set:
+        description: '[bake mode] Variables to set (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
+
+      # === Optional ===
+      env:
+        description: 'Environment variables to set before build (KEY=VALUE format, one per line)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   prep:
@@ -59,7 +87,7 @@ jobs:
       - name: Sanitize tag
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
-      - name: check if we are in a fork PR
+      - name: Check if we are in a fork PR
         id: fork-check
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
@@ -68,7 +96,7 @@ jobs:
             echo "is_fork_pr=false" >> $GITHUB_OUTPUT
           fi
 
-  bake:
+  build:
     needs: prep
     strategy:
       fail-fast: true
@@ -103,18 +131,44 @@ jobs:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
           create_credentials_file: true
+
       - name: Configure Docker for GCP Artifact Registry
         if: inputs.gcp_project_id != '' && needs.prep.outputs.is_fork_pr == 'false'
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Set environment variables for bake
+      - name: Set environment variables
         if: inputs.env != ''
         run: |
           cat >> $GITHUB_ENV << 'EOF'
           ${{ inputs.env }}
           EOF
 
-      - name: Bake architecture specific image
+      # === Build mode ===
+      - name: Build image (build mode)
+        if: inputs.mode == 'build'
+        id: build
+        uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
+        with:
+          context: "{{defaultContext}}:${{ inputs.context }}"
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: mode=max
+          build-args: ${{ inputs.build_args }}
+          cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
+          cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
+
+      - name: Extract digest (build mode)
+        if: inputs.mode == 'build'
+        run: |
+          echo '${{ steps.build.outputs.digest }}' > /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
+          cat /tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt
+
+      # === Bake mode ===
+      - name: Build image (bake mode)
+        if: inputs.mode == 'bake'
         id: bake
         env:
           PLATFORMS: ${{ matrix.platform }}
@@ -131,7 +185,8 @@ jobs:
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
-      - name: Extract digest from metadata
+      - name: Extract digest (bake mode)
+        if: inputs.mode == 'bake'
         run: |
           PREFIX=/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}
           METADATA_FILE=$PREFIX-metadata.json
@@ -144,6 +199,7 @@ jobs:
           cat $METADATA_FILE | jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' > $OUTPUT_FILE
           cat $OUTPUT_FILE
 
+      # === Common ===
       - name: Upload digest
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -154,13 +210,14 @@ jobs:
       
   merge:
     name: merge multi-arch manifest & attest it
-    needs: [prep, bake]
+    needs: [prep, build]
     runs-on: ubuntu-24.04
     steps:
       - name: harden-runner
         uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
         with:
           egress-policy: audit
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
 
@@ -217,3 +274,4 @@ jobs:
           subject-name: ${{ inputs.registry }}/${{ inputs.image_name }}
           subject-digest: ${{ steps.merge.outputs.digest }}
           push-to-registry: true
+
