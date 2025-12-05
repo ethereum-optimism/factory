@@ -1,8 +1,5 @@
 name: Docker Build (Reusable)
 # Supports both docker build and docker bake modes
-# Supports both public and private repos
-# Public repos: uses ubuntu-24.04-arm for native ARM builds (faster)
-# Private repos: uses ubuntu-latest with QEMU for ARM (set use_arm_runners: false)
 
 on:
   workflow_call:
@@ -35,11 +32,11 @@ on:
         required: false
         type: string
         default: ${{ github.ref_name }}
-      use_arm_runners:
-        description: 'Use native ARM runners (only works in public repos)'
+      skip_arm64:
+        description: 'Skip ARM64 builds (build amd64 only)'
         required: false
         type: boolean
-        default: true
+        default: false
       env:
         description: 'Environment variables to set before build (KEY=VALUE format, one per line)'
         required: false
@@ -104,11 +101,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-        - platform: linux/amd64
-          runner: ubuntu-latest
-        - platform: linux/arm64
-          runner: ${{ inputs.use_arm_runners && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+        include: ${{ fromJSON(inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     runs-on: ${{ matrix.runner }}
     
     steps:
@@ -119,10 +112,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
-
-      - name: Set up QEMU
-        if: ${{ !inputs.use_arm_runners }}
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
