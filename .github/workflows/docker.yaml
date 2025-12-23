@@ -62,10 +62,10 @@ on:
 
       # === Bake mode inputs ===
       source:
-        description: '[bake mode] Build context source. Use "." for checked-out code (default), or empty string for Git context (remote)'
+        description: '[bake mode] Build context source. Defaults to "{{defaultContext}}" (Git context). Override with "." to use checked-out code if submodules require local auth'
         required: false
         type: string
-        default: '.'
+        default: '{{defaultContext}}'
       bake_file:
         description: '[bake mode] Path to docker-bake.hcl or docker-compose.yml file'
         required: false
