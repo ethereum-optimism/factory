@@ -61,6 +61,11 @@ on:
         default: ''
 
       # === Bake mode inputs ===
+      source:
+        description: '[bake mode] Build context source. Use "." for checked-out code (default), or empty string for Git context (remote)'
+        required: false
+        type: string
+        default: '.'
       bake_file:
         description: '[bake mode] Path to docker-bake.hcl or docker-compose.yml file'
         required: false
@@ -169,6 +174,7 @@ jobs:
           PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
+          source: ${{ inputs.source }}
           targets: ${{ inputs.target }}
           push: true
           files: ${{ inputs.bake_file }}
