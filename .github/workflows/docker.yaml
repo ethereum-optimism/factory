@@ -45,12 +45,12 @@ on:
 
       # === Source repository inputs ===
       source_repo:
-        description: 'Source repository to build from (format: owner/repo). If empty, uses the calling workflow repository with git context.'
+        description: 'Source repository to build from (format: owner/repo). Defaults to github.repository (the calling workflow repository).'
         required: false
         type: string
         default: ''
       source_ref:
-        description: 'Git ref (branch, tag, SHA) to checkout from source_repo. Defaults to github.sha if not specified.'
+        description: 'Git ref (branch, tag, SHA) to checkout. Defaults to github.sha (the commit that triggered the workflow).'
         required: false
         type: string
         default: ''
@@ -134,7 +134,7 @@ jobs:
           egress-policy: audit
 
       - name: Generate GitHub App token
-        if: inputs.source_repo != '' && secrets.github_app_id != ''
+        if: secrets.github_app_id != ''
         id: app-token
         uses: actions/create-github-app-token@df432ccc7b4c3da7cc414155f3ddf3b5cf5bb4c4 # v2
         with:
@@ -143,10 +143,9 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Checkout source repository
-        if: inputs.source_repo != ''
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
         with:
-          repository: ${{ inputs.source_repo }}
+          repository: ${{ inputs.source_repo || github.repository }}
           ref: ${{ inputs.source_ref || github.sha }}
           token: ${{ steps.app-token.outputs.token || secrets.source_token || github.token }}
           submodules: recursive
@@ -188,7 +187,7 @@ jobs:
         id: build
         uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
         with:
-          context: ${{ inputs.source_repo != '' && inputs.context || format('{{defaultContext}}:{0}', inputs.context) }}
+          context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           target: ${{ inputs.target }}
           platforms: ${{ matrix.platform }}
@@ -207,7 +206,7 @@ jobs:
           PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
-          source: ${{ inputs.source_repo == '' && '{{defaultContext}}' || '.' }}
+          source: .
           targets: ${{ inputs.target }}
           push: true
           files: ${{ inputs.bake_file }}
