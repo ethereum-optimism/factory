@@ -139,7 +139,7 @@ jobs:
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
 
       - name: Authenticate to Google Cloud
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         id: auth
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -148,11 +148,11 @@ jobs:
           create_credentials_file: true
 
       - name: Configure Docker for GCP Artifact Registry
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
       - name: Login to GCP Artifact Registry
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
         with:
           registry: ${{ inputs.registry }}
@@ -246,7 +246,7 @@ jobs:
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
 
       - name: Authenticate to Google Cloud
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         id: auth
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -254,7 +254,7 @@ jobs:
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
 
       - name: Login to GCP Artifact Registry
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
         with:
           registry: ${{ inputs.registry }}
@@ -312,7 +312,7 @@ jobs:
   attest:
     name: attest build provenance
     needs: [safety-checklist, merge]
-    if: needs.safety-checklist.outputs.is_fork_pr == 'false'
+    if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
     runs-on: ubuntu-24.04
     steps:
       - name: Harden the runner
