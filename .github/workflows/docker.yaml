@@ -43,6 +43,18 @@ on:
         type: string
         default: ''
 
+      # === Source repository inputs ===
+      source_repo:
+        description: 'Source repository to build from (format: owner/repo). If empty, uses the calling workflow repository with git context.'
+        required: false
+        type: string
+        default: ''
+      source_ref:
+        description: 'Git ref (branch, tag, SHA) to checkout from source_repo. Only used when source_repo is specified.'
+        required: false
+        type: string
+        default: ''
+
       # === Build mode inputs ===
       context:
         description: '[build mode] Build context path'
@@ -71,6 +83,11 @@ on:
         required: false
         type: string
         default: ''
+
+    secrets:
+      source_token:
+        description: 'Token for accessing source_repo when it is a private repository'
+        required: false
 
 jobs:
   safety-checklist:
@@ -110,8 +127,13 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout
+      - name: Checkout source repository
+        if: inputs.source_repo != ''
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
+        with:
+          repository: ${{ inputs.source_repo }}
+          ref: ${{ inputs.source_ref || github.ref }}
+          token: ${{ secrets.source_token || github.token }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
@@ -150,7 +172,7 @@ jobs:
         id: build
         uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
         with:
-          context: "{{defaultContext}}:${{ inputs.context }}"
+          context: ${{ inputs.source_repo != '' && inputs.context || format('{{defaultContext}}:{0}', inputs.context) }}
           file: ${{ inputs.dockerfile }}
           target: ${{ inputs.target }}
           platforms: ${{ matrix.platform }}
@@ -169,6 +191,7 @@ jobs:
           PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
+          source: ${{ inputs.source_repo == '' && '{{defaultContext}}' || '' }}
           targets: ${{ inputs.target }}
           push: true
           files: ${{ inputs.bake_file }}

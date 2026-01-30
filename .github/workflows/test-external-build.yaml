@@ -1,0 +1,43 @@
+name: Test External Repository Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: 'Repository to build from (owner/repo)'
+        required: true
+        default: 'ethereum-optimism/optimism'
+      source_ref:
+        description: 'Branch, tag, or SHA to build'
+        required: true
+        default: 'develop'
+      image_name:
+        description: 'Image name (op-node, op-batcher, op-faucet, op-program, op-proposer, op-challenger, op-dispute-mon, op-conductor, da-server, op-supervisor, op-supernode, op-test-sequencer, cannon, op-dripper, op-interop-mon, op-rbuilder, kona-node)'
+        required: true
+        default: 'op-node'
+        type: string
+      tag:
+        description: 'Image tag'
+        required: false
+        default: 'test'
+      skip_arm64:
+        description: 'Skip ARM64 build (faster for testing)'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/docker.yaml
+    with:
+      mode: bake
+      source_repo: ${{ inputs.source_repo }}
+      source_ref: ${{ inputs.source_ref }}
+      image_name: ${{ inputs.image_name }}
+      bake_file: docker-bake.hcl
+      target: ${{ inputs.image_name }}
+      registry: ttl.sh/${{ github.run_id }}
+      tag: ${{ inputs.tag }}
+      skip_arm64: ${{ inputs.skip_arm64 }}
+    secrets:
+      source_token: ${{ secrets.SOURCE_REPO_TOKEN }}
