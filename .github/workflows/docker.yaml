@@ -191,7 +191,7 @@ jobs:
           PLATFORMS: ${{ matrix.platform }}
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
         with:
-          source: ${{ inputs.source_repo == '' && '{{defaultContext}}' || '' }}
+          source: ${{ inputs.source_repo == '' && '{{defaultContext}}' || '.' }}
           targets: ${{ inputs.target }}
           push: true
           files: ${{ inputs.bake_file }}
