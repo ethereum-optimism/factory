@@ -12,19 +12,10 @@ on:
         required: true
         default: 'develop'
       image_name:
-        description: 'Image name to build (must match a bake target)'
+        description: 'Image name (op-node, op-batcher, op-faucet, op-program, op-proposer, op-challenger, op-dispute-mon, op-conductor, da-server, op-supervisor, op-supernode, op-test-sequencer, cannon, op-dripper, op-interop-mon, op-rbuilder, kona-node)'
         required: true
         default: 'op-node'
-        type: choice
-        options:
-          - op-node
-          - op-batcher
-          - op-proposer
-          - op-challenger
-          - op-dispute-mon
-          - op-conductor
-          - op-supervisor
-          - cannon
+        type: string
       tag:
         description: 'Image tag'
         required: false
