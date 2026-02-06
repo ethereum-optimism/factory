@@ -136,7 +136,7 @@ jobs:
       - name: Generate GitHub App token
         if: inputs.source_repo != '' && inputs.source_repo != github.repository
         id: app-token
-        uses: actions/create-github-app-token@df432ccc7b4c3da7cc414155f3ddf3b5cf5bb4c4 # v2
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         with:
           app-id: ${{ secrets.github_app_id }}
           private-key: ${{ secrets.github_app_private_key }}
