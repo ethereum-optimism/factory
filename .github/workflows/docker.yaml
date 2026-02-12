@@ -88,12 +88,6 @@ on:
       source_token:
         description: 'Token for accessing source_repo when it is a private repository'
         required: false
-      github_app_id:
-        description: 'GitHub App ID for generating tokens to access private source repositories'
-        required: false
-      github_app_private_key:
-        description: 'GitHub App private key (PEM format) for generating tokens'
-        required: false
 
 jobs:
   safety-checklist:
@@ -133,21 +127,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Generate GitHub App token
-        if: inputs.source_repo != '' && inputs.source_repo != github.repository
-        id: app-token
-        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
-        with:
-          app-id: ${{ secrets.github_app_id }}
-          private-key: ${{ secrets.github_app_private_key }}
-          owner: ${{ github.repository_owner }}
-
       - name: Checkout source repository
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
         with:
           repository: ${{ inputs.source_repo || github.repository }}
           ref: ${{ inputs.source_ref || github.sha }}
-          token: ${{ secrets.source_token || steps.app-token.outputs.token || github.token }}
+          token: ${{ secrets.source_token || github.token }}
           submodules: recursive
 
       - name: Set up Docker Buildx
