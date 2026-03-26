@@ -42,6 +42,11 @@ on:
         required: false
         type: string
         default: ''
+      sbom:
+        description: 'Generate SBOM attestation for the build'
+        required: false
+        type: boolean
+        default: true
 
       # === Source repository inputs ===
       source_repo:
@@ -178,6 +183,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           provenance: mode=max
+          sbom: ${{ inputs.sbom }}
           build-args: ${{ inputs.build_args }}
           cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
           cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
@@ -196,6 +202,7 @@ jobs:
           push: true
           files: ${{ inputs.bake_file }}
           provenance: mode=max
+          sbom: ${{ inputs.sbom }}
           set: |
             *.tags=
             *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
