@@ -1,12 +1,12 @@
-name: Docker Build (Reusable)
-# Supports both docker build and docker bake modes
+name: Container Build (Reusable)
+# Supports docker build, docker bake, and ko build modes
 
 on:
   workflow_call:
     inputs:
       # === Common inputs ===
       mode:
-        description: 'Build mode: "build" for Dockerfile, "bake" for docker-bake.hcl'
+        description: 'Build mode: "build" for Dockerfile, "bake" for docker-bake.hcl, "ko" for Go static binaries'
         required: false
         type: string
         default: 'build'
@@ -89,6 +89,23 @@ on:
         type: string
         default: ''
 
+      # === Ko mode inputs ===
+      ko_working_directory:
+        description: '[ko mode] Directory containing go.mod and .ko.yaml'
+        required: false
+        type: string
+        default: '.'
+      ko_importpath:
+        description: '[ko mode] Go import path to build (e.g., ./cmd)'
+        required: false
+        type: string
+        default: './cmd'
+      ko_go_version_file:
+        description: '[ko mode] Path to go.mod for setup-go (relative to repo root). Defaults to {ko_working_directory}/go.mod'
+        required: false
+        type: string
+        default: ''
+
     secrets:
       source_token:
         description: 'Token for accessing source_repo when it is a private repository'
@@ -141,7 +158,21 @@ jobs:
           submodules: recursive
 
       - name: Set up Docker Buildx
+        if: inputs.mode != 'ko'
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
+
+      - name: Setup Go
+        if: inputs.mode == 'ko'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: ${{ inputs.ko_go_version_file || format('{0}/go.mod', inputs.ko_working_directory) }}
+          cache-dependency-path: ${{ inputs.ko_working_directory }}/go.sum
+
+      - name: Setup ko
+        if: inputs.mode == 'ko'
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
+        env:
+          KO_DOCKER_REPO: ${{ inputs.registry }}/${{ inputs.image_name }}
 
       - name: Authenticate to Google Cloud
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
@@ -210,11 +241,32 @@ jobs:
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image_name }},push=true
             ${{ inputs.set }}
 
+      # === Ko mode ===
+      - name: Build image (ko mode)
+        if: inputs.mode == 'ko'
+        id: ko
+        working-directory: ${{ inputs.ko_working_directory }}
+        env:
+          KO_DOCKER_REPO: ${{ inputs.registry }}/${{ inputs.image_name }}
+          KO_CONFIG_PATH: ${{ github.workspace }}
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          PLATFORM_SUFFIX="${PLATFORM//\//-}"
+          image=$(ko build \
+            --bare \
+            --sbom=${{ inputs.sbom && 'spdx' || 'none' }} \
+            --platform=${{ matrix.platform }} \
+            -t "build-${PLATFORM_SUFFIX}-${{ github.sha }}" \
+            ${{ inputs.ko_importpath }})
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
+          echo "Built (${{ matrix.platform }}): $image"
+
       # === Extract digest ===
       - name: Extract digest
         run: |
           OUTPUT_FILE="/tmp/${{ inputs.image_name }}-${{ github.sha }}-${{ strategy.job-index }}.txt"
-          
+
           if [[ "${{ inputs.mode }}" == "build" ]]; then
             cat <<'DIGEST_EOF' > "$OUTPUT_FILE"
           ${{ steps.build.outputs.digest }}
@@ -225,8 +277,10 @@ jobs:
           ${{ steps.bake.outputs.metadata }}
           METADATA_EOF
             jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$METADATA_FILE" > "$OUTPUT_FILE"
+          elif [[ "${{ inputs.mode }}" == "ko" ]]; then
+            echo "${{ steps.ko.outputs.digest }}" > "$OUTPUT_FILE"
           fi
-          
+
           echo "Extracted digest: $(cat $OUTPUT_FILE)"
 
       - name: Upload digest
