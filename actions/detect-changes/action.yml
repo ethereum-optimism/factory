@@ -1,0 +1,174 @@
+name: 'Detect Changes'
+description: >
+  Detect which Docker images need rebuilding based on changed files.
+  Reads a JSON config that maps image names to dependency paths, diffs
+  the PR against the base branch, and outputs a filtered build matrix.
+  Requires actions/checkout with fetch-depth: 0.
+
+inputs:
+  config:
+    description: 'Path to the JSON config file that defines images and their dependency paths'
+    required: false
+    default: '.github/images.json'
+
+outputs:
+  matrix_json:
+    description: 'JSON array of image objects to build (each object contains all fields from the config entry plus image_name)'
+    value: ${{ steps.detect.outputs.matrix_json }}
+  has_images:
+    description: 'Whether any images need building (true/false)'
+    value: ${{ steps.detect.outputs.has_images }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+      with:
+        egress-policy: audit
+    - name: Detect affected images
+      id: detect
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! -f "$CONFIG" ]]; then
+          echo "::error::Config file not found: $CONFIG"
+          exit 1
+        fi
+
+        # Build the full matrix from config: adds image_name and flattens all fields
+        build_full_matrix() {
+          jq -c '[.images | to_entries[] | .value + {image_name: .key} | del(.paths)]' "$CONFIG"
+        }
+
+        # For non-PR events (push, schedule), build all images
+        if [[ "$EVENT_NAME" != "pull_request" ]]; then
+          echo "Non-PR event ($EVENT_NAME): building all images"
+          MATRIX=$(build_full_matrix)
+          echo "matrix_json=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "has_images=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # For PRs, detect which files changed (three-dot diff = only the PR's changes)
+        CHANGED_FILES=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>/dev/null || true)
+
+        if [[ -z "$CHANGED_FILES" ]]; then
+          echo "::warning::Could not compute diff (shallow clone?). Building all images as fallback."
+          MATRIX=$(build_full_matrix)
+          echo "matrix_json=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "has_images=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "Changed files:"
+        echo "$CHANGED_FILES" | head -50
+        TOTAL=$(echo "$CHANGED_FILES" | wc -l)
+        echo "($TOTAL files total)"
+
+        # matches_pattern checks if a file matches a path pattern
+        # "foo/**" matches any file under foo/
+        # "foo" matches the exact file foo
+        matches_pattern() {
+          local file="$1"
+          local pattern="$2"
+          if [[ "$pattern" == *"/**" ]]; then
+            local prefix="${pattern%/**}"
+            [[ "$file" == "$prefix/"* ]] && return 0
+          else
+            [[ "$file" == "$pattern" ]] && return 0
+          fi
+          return 1
+        }
+
+        BUILD_ALL=false
+
+        # Check shared paths (trigger all images)
+        if jq -e '.shared_paths' "$CONFIG" > /dev/null 2>&1; then
+          SHARED_PATHS=$(jq -r '.shared_paths[]' "$CONFIG")
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Shared path match: $file matches $pattern → building all images"
+                BUILD_ALL=true
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$SHARED_PATHS"
+        fi
+
+        if [[ "$BUILD_ALL" == "true" ]]; then
+          MATRIX=$(build_full_matrix)
+          echo "matrix_json=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "has_images=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Check shared_*_paths entries (trigger all images of that type)
+        declare -A TYPE_BUILD_ALL
+        SHARED_TYPE_KEYS=$(jq -r 'keys[] | select(test("^shared_.*_paths$")) | sub("^shared_"; "") | sub("_paths$"; "")' "$CONFIG")
+        while IFS= read -r type_name; do
+          [[ -z "$type_name" ]] && continue
+          TYPE_PATHS=$(jq -r --arg key "shared_${type_name}_paths" '.[$key][]' "$CONFIG")
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Shared ${type_name} path match: $file matches $pattern → building all ${type_name} images"
+                TYPE_BUILD_ALL["$type_name"]=1
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$TYPE_PATHS"
+        done <<< "$SHARED_TYPE_KEYS"
+
+        # Collect affected images
+        declare -A AFFECTED
+
+        # Mark all images of matched types
+        for type_name in "${!TYPE_BUILD_ALL[@]}"; do
+          while IFS= read -r name; do
+            AFFECTED["$name"]=1
+          done < <(jq -r --arg t "$type_name" '.images | to_entries[] | select(.value.type == $t) | .key' "$CONFIG")
+        done
+
+        # Check per-image paths for remaining images
+        while IFS= read -r entry; do
+          name=$(echo "$entry" | jq -r '.key')
+          [[ -n "${AFFECTED[$name]+x}" ]] && continue
+
+          paths=$(echo "$entry" | jq -r '.value.paths[]')
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Image path match: $file matches $pattern → building $name"
+                AFFECTED["$name"]=1
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$paths"
+        done < <(jq -c '.images | to_entries[]' "$CONFIG")
+
+        # Build output matrix from affected images
+        if [[ ${#AFFECTED[@]} -eq 0 ]]; then
+          echo "No images affected by this change"
+          echo "matrix_json=[]" >> "$GITHUB_OUTPUT"
+          echo "has_images=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        AFFECTED_NAMES=$(printf '%s\n' "${!AFFECTED[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+        MATRIX=$(echo "$AFFECTED_NAMES" | jq -c --slurpfile config "$CONFIG" '[.[] as $name | $config[0].images[$name] + {image_name: $name} | del(.paths)]')
+
+        echo "Affected images: $AFFECTED_NAMES"
+        echo "matrix_json=$MATRIX" >> "$GITHUB_OUTPUT"
+
+        HAS_IMAGES=$( [[ $(echo "$MATRIX" | jq 'length') -gt 0 ]] && echo "true" || echo "false" )
+        echo "has_images=$HAS_IMAGES" >> "$GITHUB_OUTPUT"
