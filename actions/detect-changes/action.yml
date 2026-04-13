@@ -9,7 +9,7 @@ inputs:
   config:
     description: 'Path to the JSON config file that defines images and their dependency paths'
     required: false
-    default: '.github/docker-images.json'
+    default: '.github/images.json'
 
 outputs:
   matrix_json:
