@@ -396,7 +396,7 @@ jobs:
           password: ${{ steps.auth.outputs.auth_token }}
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@ba965ac88abfc6fa49344893ed19e5bf479a07d6 # v3
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
         with:
           subject-name: ${{ inputs.registry }}/${{ inputs.image_name }}
           subject-digest: ${{ needs.merge.outputs.digest }}
