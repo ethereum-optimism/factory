@@ -119,7 +119,7 @@ jobs:
       is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
           egress-policy: audit
 
@@ -145,7 +145,7 @@ jobs:
     
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
           egress-policy: audit
 
@@ -159,7 +159,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: inputs.mode != 'ko'
-        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Setup Go
         if: inputs.mode == 'ko'
@@ -189,7 +189,7 @@ jobs:
 
       - name: Login to GCP Artifact Registry
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
-        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ inputs.registry }}
           username: oauth2accesstoken
@@ -206,7 +206,7 @@ jobs:
       - name: Build image (build mode)
         if: inputs.mode == 'build'
         id: build
-        uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d # v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
         with:
           context: "{{defaultContext}}:${{ inputs.context }}"
           file: ${{ inputs.dockerfile }}
@@ -226,7 +226,7 @@ jobs:
         id: bake
         env:
           PLATFORMS: ${{ matrix.platform }}
-        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6
+        uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7
         with:
           source: .
           targets: ${{ inputs.target }}
@@ -299,12 +299,12 @@ jobs:
       digest: ${{ steps.merge.outputs.digest }}
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
           egress-policy: audit
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a # v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Authenticate to Google Cloud
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
@@ -316,7 +316,7 @@ jobs:
 
       - name: Login to GCP Artifact Registry
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
-        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ inputs.registry }}
           username: oauth2accesstoken
@@ -377,7 +377,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
           egress-policy: audit
 
@@ -389,7 +389,7 @@ jobs:
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
 
       - name: Login to GCP Artifact Registry
-        uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c # v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ inputs.registry }}
           username: oauth2accesstoken
