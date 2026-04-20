@@ -1,0 +1,277 @@
+name: 'Plan'
+description: >
+  Plan the Docker images to build for a given workflow run. Combines the
+  responsibilities of the legacy detect-changes and parse-tag actions plus the
+  build-config lookup that the reusable docker.yaml workflow needs.
+
+  On pull_request events it diffs the PR against its base and emits a matrix
+  of only the affected images. On any other push event to a non-tag ref it
+  emits all images. On a tag push it emits a single-entry matrix by parsing
+  the tag into image_name and version, looks the image up in the config, and
+  injects the release version into env/build_args (stripping any existing
+  VERSION= lines).
+
+  Tag format: "<image_name>/v<semver>". If the repo has exactly one image in
+  the config, a bare "v<semver>" tag is also accepted and bound to that image.
+
+  Requires actions/checkout (fetch-depth 0 on pull_request) before use.
+
+inputs:
+  config:
+    description: 'Path to the JSON config file that defines images and their dependency paths'
+    required: false
+    default: '.github/images.json'
+
+outputs:
+  matrix_json:
+    description: 'JSON array of build entries; each entry is a fully populated set of inputs for factory/.github/workflows/docker.yaml'
+    value: ${{ steps.plan.outputs.matrix_json }}
+  has_builds:
+    description: 'Whether any builds are planned (true/false)'
+    value: ${{ steps.plan.outputs.has_builds }}
+  is_release:
+    description: 'True when the workflow was triggered by a tag push'
+    value: ${{ steps.plan.outputs.is_release }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2
+      with:
+        egress-policy: audit
+    - name: Plan builds
+      id: plan
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        EVENT_NAME: ${{ github.event_name }}
+        REF_TYPE: ${{ github.ref_type }}
+        REF_NAME: ${{ github.ref_name }}
+        SHA: ${{ github.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! -f "$CONFIG" ]]; then
+          echo "::error::Config file not found: $CONFIG"
+          exit 1
+        fi
+
+        # ---------------------------------------------------------------------
+        # Helpers
+        # ---------------------------------------------------------------------
+
+        # Build a per-image matrix entry: merges the config fields with the
+        # image_name and a provided tag. Strips "paths" since the downstream
+        # workflow does not need it.
+        build_entry() {
+          local name="$1" tag="$2"
+          jq -c \
+            --arg n "$name" \
+            --arg t "$tag" \
+            '.images[$n] + {image_name: $n, tag: $t} | del(.paths)' \
+            "$CONFIG"
+        }
+
+        # Like build_entry, but overrides VERSION in env and build_args so a
+        # release tag wins over any VERSION=v0.0.0 default from images.json.
+        build_release_entry() {
+          local name="$1" version="$2"
+          jq -c \
+            --arg n "$name" \
+            --arg v "$version" \
+            '
+              def override_version:
+                if . == null or . == "" then
+                  "VERSION=" + $v
+                else
+                  (split("\n") | map(select(startswith("VERSION=") | not)) | . + ["VERSION=" + $v] | join("\n"))
+                end;
+              (.images[$n] // error("image not found: " + $n))
+              | . + {image_name: $n, tag: $v}
+              | .env = (.env | override_version)
+              | .build_args = (.build_args | override_version)
+              | del(.paths)
+            ' \
+            "$CONFIG"
+        }
+
+        # matches_pattern implements the two path-pattern flavours used in
+        # images.json: "dir/**" matches any file below dir/, and an exact
+        # string matches only that file.
+        matches_pattern() {
+          local file="$1"
+          local pattern="$2"
+          if [[ "$pattern" == *"/**" ]]; then
+            local prefix="${pattern%/**}"
+            [[ "$file" == "$prefix/"* ]] && return 0
+          else
+            [[ "$file" == "$pattern" ]] && return 0
+          fi
+          return 1
+        }
+
+        emit() {
+          local matrix="$1" is_release="$2"
+          local has_builds
+          has_builds=$( [[ $(echo "$matrix" | jq 'length') -gt 0 ]] && echo "true" || echo "false" )
+          {
+            echo "matrix_json=$matrix"
+            echo "has_builds=$has_builds"
+            echo "is_release=$is_release"
+          } >> "$GITHUB_OUTPUT"
+          echo "matrix_json=$matrix"
+          echo "has_builds=$has_builds"
+          echo "is_release=$is_release"
+        }
+
+        # ---------------------------------------------------------------------
+        # Tag path: one-image matrix, version from the tag
+        # ---------------------------------------------------------------------
+
+        if [[ "$REF_TYPE" == "tag" ]]; then
+          echo "Tag push detected: ref_name=$REF_NAME"
+
+          if [[ "$REF_NAME" == */* ]]; then
+            IMAGE_NAME="${REF_NAME%%/*}"
+            VERSION="${REF_NAME#*/}"
+          else
+            # Bare tag: only valid when there is exactly one image configured.
+            IMAGE_COUNT=$(jq '.images | length' "$CONFIG")
+            if [[ "$IMAGE_COUNT" != "1" ]]; then
+              echo "::error::Bare tag '$REF_NAME' requires exactly one image in $CONFIG, found $IMAGE_COUNT"
+              exit 1
+            fi
+            IMAGE_NAME=$(jq -r '.images | keys[0]' "$CONFIG")
+            VERSION="$REF_NAME"
+          fi
+
+          if ! jq -e --arg n "$IMAGE_NAME" '.images[$n]' "$CONFIG" >/dev/null 2>&1; then
+            echo "::error::Image '$IMAGE_NAME' (parsed from tag '$REF_NAME') not found in $CONFIG under .images"
+            exit 1
+          fi
+
+          echo "Resolved tag: image=$IMAGE_NAME version=$VERSION"
+          ENTRY=$(build_release_entry "$IMAGE_NAME" "$VERSION")
+          MATRIX=$(echo "[$ENTRY]" | jq -c '.')
+          emit "$MATRIX" "true"
+          exit 0
+        fi
+
+        # ---------------------------------------------------------------------
+        # Non-PR branch path: build everything
+        # ---------------------------------------------------------------------
+
+        build_full_matrix() {
+          local tag="$1"
+          jq -c \
+            --arg t "$tag" \
+            '[.images | to_entries[] | .value + {image_name: .key, tag: $t} | del(.paths)]' \
+            "$CONFIG"
+        }
+
+        if [[ "$EVENT_NAME" != "pull_request" ]]; then
+          echo "Non-PR event ($EVENT_NAME): planning all images"
+          MATRIX=$(build_full_matrix "$SHA")
+          emit "$MATRIX" "false"
+          exit 0
+        fi
+
+        # ---------------------------------------------------------------------
+        # PR path: matrix is only the affected images
+        # ---------------------------------------------------------------------
+
+        CHANGED_FILES=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>/dev/null || true)
+
+        if [[ -z "$CHANGED_FILES" ]]; then
+          echo "::warning::Could not compute diff (shallow clone?). Planning all images as fallback."
+          MATRIX=$(build_full_matrix "$SHA")
+          emit "$MATRIX" "false"
+          exit 0
+        fi
+
+        echo "Changed files:"
+        echo "$CHANGED_FILES" | head -50
+        TOTAL=$(echo "$CHANGED_FILES" | wc -l)
+        echo "($TOTAL files total)"
+
+        BUILD_ALL=false
+
+        if jq -e '.shared_paths' "$CONFIG" > /dev/null 2>&1; then
+          SHARED_PATHS=$(jq -r '.shared_paths[]' "$CONFIG")
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Shared path match: $file matches $pattern -> planning all images"
+                BUILD_ALL=true
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$SHARED_PATHS"
+        fi
+
+        if [[ "$BUILD_ALL" == "true" ]]; then
+          MATRIX=$(build_full_matrix "$SHA")
+          emit "$MATRIX" "false"
+          exit 0
+        fi
+
+        # shared_<type>_paths entries flag every image whose .type matches.
+        declare -A TYPE_BUILD_ALL=()
+        SHARED_TYPE_KEYS=$(jq -r 'keys[] | select(test("^shared_.*_paths$")) | sub("^shared_"; "") | sub("_paths$"; "")' "$CONFIG")
+        while IFS= read -r type_name; do
+          [[ -z "$type_name" ]] && continue
+          TYPE_PATHS=$(jq -r --arg key "shared_${type_name}_paths" '.[$key][]' "$CONFIG")
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Shared ${type_name} path match: $file matches $pattern -> planning all ${type_name} images"
+                TYPE_BUILD_ALL["$type_name"]=1
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$TYPE_PATHS"
+        done <<< "$SHARED_TYPE_KEYS"
+
+        declare -A AFFECTED=()
+
+        for type_name in "${!TYPE_BUILD_ALL[@]}"; do
+          while IFS= read -r name; do
+            AFFECTED["$name"]=1
+          done < <(jq -r --arg t "$type_name" '.images | to_entries[] | select(.value.type == $t) | .key' "$CONFIG")
+        done
+
+        while IFS= read -r entry; do
+          name=$(echo "$entry" | jq -r '.key')
+          [[ -n "${AFFECTED[$name]+x}" ]] && continue
+
+          paths=$(echo "$entry" | jq -r '.value.paths[]?')
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Image path match: $file matches $pattern -> planning $name"
+                AFFECTED["$name"]=1
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$paths"
+        done < <(jq -c '.images | to_entries[]' "$CONFIG")
+
+        if [[ ${#AFFECTED[@]} -eq 0 ]]; then
+          echo "No images affected by this change"
+          emit "[]" "false"
+          exit 0
+        fi
+
+        AFFECTED_NAMES=$(printf '%s\n' "${!AFFECTED[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+        MATRIX=$(echo "$AFFECTED_NAMES" | jq -c \
+          --slurpfile config "$CONFIG" \
+          --arg t "$SHA" \
+          '[.[] as $name | $config[0].images[$name] + {image_name: $name, tag: $t} | del(.paths)]')
+
+        echo "Affected images: $AFFECTED_NAMES"
+        emit "$MATRIX" "false"
