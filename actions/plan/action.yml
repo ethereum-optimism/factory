@@ -173,7 +173,7 @@ runs:
 
         if [[ "$EVENT_NAME" != "pull_request" ]]; then
           echo "Non-PR event ($EVENT_NAME): planning all images"
-          MATRIX=$(build_full_matrix "$SHA")
+          MATRIX=$(build_full_matrix "$REF_NAME")
           emit "$MATRIX" "false"
           exit 0
         fi
@@ -186,7 +186,7 @@ runs:
 
         if [[ -z "$CHANGED_FILES" ]]; then
           echo "::warning::Could not compute diff (shallow clone?). Planning all images as fallback."
-          MATRIX=$(build_full_matrix "$SHA")
+          MATRIX=$(build_full_matrix "$REF_NAME")
           emit "$MATRIX" "false"
           exit 0
         fi
@@ -213,7 +213,7 @@ runs:
         fi
 
         if [[ "$BUILD_ALL" == "true" ]]; then
-          MATRIX=$(build_full_matrix "$SHA")
+          MATRIX=$(build_full_matrix "$REF_NAME")
           emit "$MATRIX" "false"
           exit 0
         fi
@@ -270,7 +270,7 @@ runs:
         AFFECTED_NAMES=$(printf '%s\n' "${!AFFECTED[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
         MATRIX=$(echo "$AFFECTED_NAMES" | jq -c \
           --slurpfile config "$CONFIG" \
-          --arg t "$SHA" \
+          --arg t "$REF_NAME" \
           '[.[] as $name | $config[0].images[$name] + {image_name: $name, tag: $t} | del(.paths)]')
 
         echo "Affected images: $AFFECTED_NAMES"
