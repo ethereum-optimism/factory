@@ -1,0 +1,252 @@
+name: Integration Test (Reusable)
+# Runs a service-provided set of integration-test suites against a built image.
+# Each suite is a directory under <test_context>/tests/<suite>/ in the source
+# repo, with a run.sh entrypoint invoked under a fixed env-var contract:
+#
+#   IMAGE            Fully-qualified image under test.
+#   REFERENCE_IMAGE  Optional reference image (e.g. for parity suites).
+#   KIND_CLUSTER     Kind cluster name when the suite opted in to kind.
+#   ARTIFACTS_DIR    Writable directory for logs, diffs, reports.
+#
+# A suite opts in to a kind cluster by committing an empty "kind" marker file
+# under its directory. The cluster is provisioned by chainguard-dev/actions
+# /setup-kind; cluster-wide knobs (k8s version, worker count, feature gates)
+# are exposed as workflow inputs. Suites that do not commit the marker do not
+# get a cluster.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 'Fully-qualified image reference under test (registry/name:tag or registry/name@sha256:...)'
+        required: true
+        type: string
+      image_name:
+        description: 'Short image name, used to namespace artifacts and kind clusters'
+        required: true
+        type: string
+      registry:
+        description: 'Container registry URL for authenticated pulls (e.g. us-docker.pkg.dev/project/repo)'
+        required: true
+        type: string
+      suites:
+        description: 'JSON array of suite names to run (e.g. ["smoke","parity"])'
+        required: true
+        type: string
+      test_context:
+        description: 'Path within the source repo that contains the tests/ tree'
+        required: false
+        type: string
+        default: '.'
+      reference_image:
+        description: 'Optional reference image reference, passed to suites as REFERENCE_IMAGE (e.g. for parity)'
+        required: false
+        type: string
+        default: ''
+      source_repo:
+        description: 'Source repository to check out (format: owner/repo). Defaults to the calling repository.'
+        required: false
+        type: string
+        default: ''
+      source_ref:
+        description: 'Git ref (branch, tag, SHA) to check out. Defaults to the commit that triggered the workflow.'
+        required: false
+        type: string
+        default: ''
+      gcp_project_id:
+        description: 'GCP Project ID for Artifact Registry authentication. Leave empty for public registries.'
+        required: false
+        type: string
+        default: ''
+      timeout_minutes:
+        description: 'Per-suite timeout in minutes'
+        required: false
+        type: number
+        default: 20
+      k8s_version:
+        description: 'Kubernetes version for suites that opt in to kind (passed to setup-kind as k8s-version)'
+        required: false
+        type: string
+        default: '1.33.x'
+      kind_version:
+        description: 'KinD version for suites that opt in to kind (passed to setup-kind as kind-version)'
+        required: false
+        type: string
+        default: '0.31.0'
+      kind_worker_count:
+        description: 'Number of worker nodes for the kind cluster'
+        required: false
+        type: string
+        default: '1'
+      kind_feature_gates:
+        description: 'Comma-separated list of Kubernetes feature gates to enable on the kind cluster'
+        required: false
+        type: string
+        default: ''
+
+    secrets:
+      source_token:
+        description: 'Token for accessing source_repo when it is a private repository'
+        required: false
+
+jobs:
+  run:
+    name: ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJson(inputs.suites) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout source repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
+        with:
+          repository: ${{ inputs.source_repo || github.repository }}
+          ref: ${{ inputs.source_ref || github.sha }}
+          token: ${{ secrets.source_token || github.token }}
+          submodules: recursive
+
+      - name: Validate suite layout
+        id: layout
+        shell: bash
+        env:
+          TEST_CONTEXT: ${{ inputs.test_context }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -euo pipefail
+          SUITE_DIR="$TEST_CONTEXT/tests/$SUITE"
+          RUN_SH="$SUITE_DIR/run.sh"
+          KIND_MARKER="$SUITE_DIR/kind"
+
+          if [[ ! -d "$SUITE_DIR" ]]; then
+            echo "::error::Suite directory not found: $SUITE_DIR"
+            exit 1
+          fi
+          if [[ ! -f "$RUN_SH" ]]; then
+            echo "::error::Suite entrypoint missing: $RUN_SH"
+            exit 1
+          fi
+
+          needs_kind=false
+          if [[ -f "$KIND_MARKER" ]]; then
+            needs_kind=true
+          fi
+
+          echo "suite_dir=$SUITE_DIR" >> "$GITHUB_OUTPUT"
+          echo "run_sh=$RUN_SH" >> "$GITHUB_OUTPUT"
+          echo "needs_kind=$needs_kind" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        if: inputs.gcp_project_id != ''
+        id: auth
+        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
+        with:
+          project_id: ${{ inputs.gcp_project_id }}
+          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Configure Docker for GCP Artifact Registry
+        if: inputs.gcp_project_id != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Login to GCP Artifact Registry
+        if: inputs.gcp_project_id != ''
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ inputs.registry }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.auth_token }}
+
+      - name: Pull image under test
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image }}
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+        run: |
+          set -euo pipefail
+          echo "Pulling image under test: $IMAGE"
+          docker pull "$IMAGE"
+          if [[ -n "$REFERENCE_IMAGE" ]]; then
+            echo "Pulling reference image: $REFERENCE_IMAGE"
+            docker pull "$REFERENCE_IMAGE"
+          fi
+
+      - name: Create kind cluster
+        if: steps.layout.outputs.needs_kind == 'true'
+        uses: chainguard-dev/actions/setup-kind@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          k8s-version: ${{ inputs.k8s_version }}
+          kind-version: ${{ inputs.kind_version }}
+          kind-worker-count: ${{ inputs.kind_worker_count }}
+          feature-gates: ${{ inputs.kind_feature_gates }}
+
+      - name: Load images into kind
+        if: steps.layout.outputs.needs_kind == 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image }}
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+        run: |
+          set -euo pipefail
+          # chainguard-dev/actions/setup-kind creates a cluster named "kind"
+          kind load docker-image --name kind "$IMAGE"
+          if [[ -n "$REFERENCE_IMAGE" ]]; then
+            kind load docker-image --name kind "$REFERENCE_IMAGE"
+          fi
+
+      - name: Prepare artifacts directory
+        id: artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACTS_DIR="${RUNNER_TEMP}/artifacts"
+          mkdir -p "$ARTIFACTS_DIR"
+          echo "dir=$ARTIFACTS_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Run suite
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image }}
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+          KIND_CLUSTER: ${{ steps.layout.outputs.needs_kind == 'true' && 'kind' || '' }}
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          RUN_SH: ${{ steps.layout.outputs.run_sh }}
+          SUITE_DIR: ${{ steps.layout.outputs.suite_dir }}
+        working-directory: ${{ steps.layout.outputs.suite_dir }}
+        run: |
+          set -euo pipefail
+          echo "Running suite: $RUN_SH"
+          echo "  IMAGE=$IMAGE"
+          echo "  REFERENCE_IMAGE=${REFERENCE_IMAGE:-<unset>}"
+          echo "  KIND_CLUSTER=${KIND_CLUSTER:-<unset>}"
+          echo "  ARTIFACTS_DIR=$ARTIFACTS_DIR"
+          bash "${GITHUB_WORKSPACE}/${RUN_SH}"
+
+      - name: Collect kind diagnostics on failure
+        if: failure() && steps.layout.outputs.needs_kind == 'true'
+        shell: bash
+        env:
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+        run: |
+          set +e
+          mkdir -p "$ARTIFACTS_DIR/kind"
+          kubectl cluster-info --context kind-kind > "$ARTIFACTS_DIR/kind/cluster-info.txt" 2>&1
+          kubectl --context kind-kind get all -A -o wide > "$ARTIFACTS_DIR/kind/all.txt" 2>&1
+          kubectl --context kind-kind describe pods -A > "$ARTIFACTS_DIR/kind/pods-describe.txt" 2>&1
+          kubectl --context kind-kind get events -A --sort-by=.lastTimestamp > "$ARTIFACTS_DIR/kind/events.txt" 2>&1
+
+      - name: Upload suite artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: integration-${{ inputs.image_name }}-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.artifacts.outputs.dir }}
+          if-no-files-found: ignore
+          retention-days: 7
