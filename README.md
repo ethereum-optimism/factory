@@ -154,11 +154,9 @@ in the service's suite directory.
 
 #### GCP metadata shim
 
-Cloud SDKs that initialize lazily against the GCE metadata server will hang or
-fail on a kind node. Setting the three variables below to dummy values lets
-the SDK finish initialization without ever reaching a real metadata endpoint,
-so services that read a project ID or zone from the environment can start
-inside kind.
+For services that expect a GCE metadata endpoint at startup, set these env
+vars in the pod spec to dummy values so the pod can start under kind without
+reaching a real metadata server:
 
 ```yaml
 env:
@@ -169,10 +167,6 @@ env:
   - name: GCE_METADATA_HOST
     value: 169.254.169.254.nip.io
 ```
-
-Use when a service links the Go cloud SDK (or a similar library) and calls
-something equivalent to `NewGCPProvider` during startup. No mocking or
-sidecars required.
 
 ## Tag format
 
