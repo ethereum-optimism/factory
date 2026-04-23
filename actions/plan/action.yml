@@ -24,7 +24,11 @@ inputs:
 
 outputs:
   matrix_json:
-    description: 'JSON array of build entries; each entry is a fully populated set of inputs for factory/.github/workflows/docker.yaml'
+    description: >
+      JSON array of build entries; each entry is a fully populated set of
+      inputs for factory/.github/workflows/docker.yaml, plus a normalized
+      "tests" array (defaulting to []) that callers can pass to
+      factory/.github/workflows/integration-test.yaml.
     value: ${{ steps.plan.outputs.matrix_json }}
   has_builds:
     description: 'Whether any builds are planned (true/false)'
@@ -70,7 +74,9 @@ runs:
           jq -c \
             --arg n "$name" \
             --arg t "$tag" \
-            '.images[$n] + {image_name: $n, tag: $t} | del(.paths)' \
+            '.images[$n] + {image_name: $n, tag: $t}
+             | .tests = (.tests // [])
+             | del(.paths)' \
             "$CONFIG"
         }
 
@@ -92,6 +98,7 @@ runs:
               | . + {image_name: $n, tag: $v}
               | .env = (.env | override_version)
               | .build_args = (.build_args | override_version)
+              | .tests = (.tests // [])
               | del(.paths)
             ' \
             "$CONFIG"
@@ -167,7 +174,11 @@ runs:
           local tag="$1"
           jq -c \
             --arg t "$tag" \
-            '[.images | to_entries[] | .value + {image_name: .key, tag: $t} | del(.paths)]' \
+            '[.images
+              | to_entries[]
+              | .value + {image_name: .key, tag: $t}
+              | .tests = (.tests // [])
+              | del(.paths)]' \
             "$CONFIG"
         }
 
@@ -271,7 +282,10 @@ runs:
         MATRIX=$(echo "$AFFECTED_NAMES" | jq -c \
           --slurpfile config "$CONFIG" \
           --arg t "$REF_NAME" \
-          '[.[] as $name | $config[0].images[$name] + {image_name: $name, tag: $t} | del(.paths)]')
+          '[.[] as $name
+            | $config[0].images[$name] + {image_name: $name, tag: $t}
+            | .tests = (.tests // [])
+            | del(.paths)]')
 
         echo "Affected images: $AFFECTED_NAMES"
         emit "$MATRIX" "false"
