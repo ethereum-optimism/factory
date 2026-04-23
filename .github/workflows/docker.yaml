@@ -113,7 +113,12 @@ on:
         type: string
         default: ''
       melange_configs:
-        description: '[apko mode] Comma-separated list of melange config paths, relative to repo root. Empty if the image uses only upstream Wolfi packages.'
+        description: '[apko mode] Comma-separated list of melange config paths. Relative to `melange_workdir` when it is set, otherwise to the repo root. Empty if the image uses only upstream Wolfi packages.'
+        required: false
+        type: string
+        default: ''
+      melange_workdir:
+        description: '[apko mode] Subdirectory that melange should treat as the source root, i.e. the directory containing `go.mod` or otherwise matching how the melange pipeline resolves paths. Defaults to the repo root. Set this to a subdirectory (e.g. `op-host-manager`) for services that live under a subpath.'
         required: false
         type: string
         default: ''
@@ -212,7 +217,7 @@ jobs:
           signing-key-path: ${{ github.workspace }}/melange.rsa
           repository-path: ${{ github.workspace }}/packages
           source-dir: ${{ github.workspace }}
-          workdir: .
+          workdir: ${{ inputs.melange_workdir }}
 
       - name: Authenticate to Google Cloud
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
