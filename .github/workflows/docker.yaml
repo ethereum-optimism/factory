@@ -1,12 +1,12 @@
 name: Container Build (Reusable)
-# Supports docker build, docker bake, and ko build modes
+# Supports docker build, docker bake, ko, and apko build modes
 
 on:
   workflow_call:
     inputs:
       # === Common inputs ===
       mode:
-        description: 'Build mode: "build" for Dockerfile, "bake" for docker-bake.hcl, "ko" for Go static binaries'
+        description: 'Build mode: "build" for Dockerfile, "bake" for docker-bake.hcl, "ko" for Go static binaries, "apko" for declarative apko+melange+Wolfi'
         required: false
         type: string
         default: 'build'
@@ -106,6 +106,18 @@ on:
         type: string
         default: ''
 
+      # === Apko mode inputs ===
+      apko_config:
+        description: '[apko mode] Path to the apko config file, relative to repo root (e.g., op-host-manager/apko/apko.yaml)'
+        required: false
+        type: string
+        default: ''
+      melange_configs:
+        description: '[apko mode] Comma-separated list of melange config paths, relative to repo root. Empty if the image uses only upstream Wolfi packages.'
+        required: false
+        type: string
+        default: ''
+
     secrets:
       source_token:
         description: 'Token for accessing source_repo when it is a private repository'
@@ -140,7 +152,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include: ${{ fromJSON(inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
+        # apko builds multi-arch natively in a single invocation, so the job runs
+        # once on an amd64 runner and emits a manifest index covering every
+        # requested arch. build/bake/ko stay on their native per-arch matrix.
+        include: ${{ fromJSON(inputs.mode == 'apko' && '[{"platform":"multi","runner":"ubuntu-latest"}]' || inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     runs-on: ${{ matrix.runner }}
     
     steps:
@@ -158,7 +173,7 @@ jobs:
           submodules: recursive
 
       - name: Set up Docker Buildx
-        if: inputs.mode != 'ko'
+        if: inputs.mode == 'build' || inputs.mode == 'bake'
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Setup Go
@@ -173,6 +188,31 @@ jobs:
         uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
         env:
           KO_DOCKER_REPO: ${{ inputs.registry }}/${{ inputs.image_name }}
+
+      # === Apko mode setup ===
+      # The melange steps only run when the image ships local packages. Images
+      # that use only upstream Wolfi packages skip straight to apko publish.
+      - name: Setup melange
+        if: inputs.mode == 'apko' && inputs.melange_configs != ''
+        uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+
+      - name: Generate ephemeral melange signing key
+        if: inputs.mode == 'apko' && inputs.melange_configs != ''
+        uses: chainguard-dev/actions/melange-keygen@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          signing-key-path: ${{ github.workspace }}/melange.rsa
+
+      - name: Build melange packages
+        if: inputs.mode == 'apko' && inputs.melange_configs != ''
+        uses: chainguard-dev/actions/melange-build-pkg@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          multi-config: ${{ inputs.melange_configs }}
+          archs: ${{ inputs.skip_arm64 && 'x86_64' || 'x86_64,aarch64' }}
+          sign-with-key: 'true'
+          signing-key-path: ${{ github.workspace }}/melange.rsa
+          repository-path: ${{ github.workspace }}/packages
+          source-dir: ${{ github.workspace }}
+          workdir: .
 
       - name: Authenticate to Google Cloud
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
@@ -262,6 +302,42 @@ jobs:
           echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
           echo "Built (${{ matrix.platform }}): $image"
 
+      # === Apko mode ===
+      # apko-publish uses a generic registry login inside its sandbox, so we
+      # hand it a fresh short-lived access token from gcloud. The same step
+      # covers amd64-only and multi-arch: archs is derived from skip_arm64 and
+      # overrides whatever the consumer's apko.yaml declares.
+      - name: Get Artifact Registry access token (apko mode)
+        if: inputs.mode == 'apko' && needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        id: ar-token
+        run: echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image (apko mode)
+        if: inputs.mode == 'apko'
+        id: apko
+        uses: chainguard-images/actions/apko-publish@8c944db3b6ddf03e393f894724815fc3ac3572f2 # v1.0.24
+        with:
+          config: ${{ inputs.apko_config }}
+          tag: ${{ inputs.registry }}/${{ inputs.image_name }}:build-${{ github.sha }}
+          archs: ${{ inputs.skip_arm64 && 'amd64' || 'amd64,arm64' }}
+          generic-user: oauth2accesstoken
+          generic-pass: ${{ steps.ar-token.outputs.token }}
+
+      # apko-publish's digest output is the full pushed image reference
+      # (registry/name@sha256:xxx). Strip to a bare digest so it plugs into
+      # the shared Extract digest / merge pipeline alongside the other modes.
+      - name: Extract apko image digest
+        if: inputs.mode == 'apko'
+        id: apko-digest
+        run: |
+          REF='${{ steps.apko.outputs.digest }}'
+          DIGEST="${REF##*@}"
+          if [[ "$DIGEST" != sha256:* ]]; then
+            echo "::error::apko-publish did not return a usable digest; got: $REF"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
       # === Extract digest ===
       - name: Extract digest
         run: |
@@ -279,6 +355,8 @@ jobs:
             jq -r '.["${{ inputs.target }}"]["containerimage.digest"]' "$METADATA_FILE" > "$OUTPUT_FILE"
           elif [[ "${{ inputs.mode }}" == "ko" ]]; then
             echo "${{ steps.ko.outputs.digest }}" > "$OUTPUT_FILE"
+          elif [[ "${{ inputs.mode }}" == "apko" ]]; then
+            echo "${{ steps.apko-digest.outputs.digest }}" > "$OUTPUT_FILE"
           fi
 
           echo "Extracted digest: $(cat $OUTPUT_FILE)"
