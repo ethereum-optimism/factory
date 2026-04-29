@@ -157,10 +157,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # apko builds multi-arch natively in a single invocation, so the job runs
-        # once on an amd64 runner and emits a manifest index covering every
-        # requested arch. build/bake/ko stay on their native per-arch matrix.
-        include: ${{ fromJSON(inputs.mode == 'apko' && '[{"platform":"multi","runner":"ubuntu-latest"}]' || inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
+        include: ${{ fromJSON(inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest","apko_arch":"amd64","melange_arch":"x86_64"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest","apko_arch":"amd64","melange_arch":"x86_64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","apko_arch":"arm64","melange_arch":"aarch64"}]') }}
     runs-on: ${{ matrix.runner }}
     
     steps:
@@ -212,7 +209,7 @@ jobs:
         uses: chainguard-dev/actions/melange-build-pkg@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
         with:
           multi-config: ${{ inputs.melange_configs }}
-          archs: ${{ inputs.skip_arm64 && 'x86_64' || 'x86_64,aarch64' }}
+          archs: ${{ matrix.melange_arch }}
           sign-with-key: 'true'
           signing-key-path: ${{ github.workspace }}/melange.rsa
           repository-path: ${{ github.workspace }}/packages
@@ -308,10 +305,6 @@ jobs:
           echo "Built (${{ matrix.platform }}): $image"
 
       # === Apko mode ===
-      # apko-publish uses a generic registry login inside its sandbox, so we
-      # hand it a fresh short-lived access token from gcloud. The same step
-      # covers amd64-only and multi-arch: archs is derived from skip_arm64 and
-      # overrides whatever the consumer's apko.yaml declares.
       - name: Get Artifact Registry access token (apko mode)
         if: inputs.mode == 'apko' && needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
         id: ar-token
@@ -323,8 +316,8 @@ jobs:
         uses: chainguard-images/actions/apko-publish@8c944db3b6ddf03e393f894724815fc3ac3572f2 # v1.0.24
         with:
           config: ${{ inputs.apko_config }}
-          tag: ${{ inputs.registry }}/${{ inputs.image_name }}:build-${{ github.sha }}
-          archs: ${{ inputs.skip_arm64 && 'amd64' || 'amd64,arm64' }}
+          tag: ${{ inputs.registry }}/${{ inputs.image_name }}:build-${{ matrix.apko_arch }}-${{ github.sha }}
+          archs: ${{ matrix.apko_arch }}
           generic-user: oauth2accesstoken
           generic-pass: ${{ steps.ar-token.outputs.token }}
 
