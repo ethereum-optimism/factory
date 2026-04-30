@@ -111,7 +111,7 @@ jobs:
       - name: Upload signing key
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: melange-signing-key
+          name: melange-key-${{ inputs.melange_config }}
           path: |
             ${{ github.workspace }}/melange.rsa
             ${{ github.workspace }}/melange.rsa.pub
@@ -147,7 +147,7 @@ jobs:
       - name: Download signing key
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: melange-signing-key
+          name: melange-key-${{ inputs.melange_config }}
           path: ${{ github.workspace }}
 
       - name: Write env file
@@ -180,7 +180,7 @@ jobs:
       - name: Upload packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: packages-${{ matrix.arch }}
+          name: packages-${{ inputs.melange_config }}-${{ matrix.arch }}
           path: |
             packages/
             melange.rsa.pub
@@ -214,7 +214,7 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: packages-*
+          pattern: packages-${{ inputs.melange_config }}-*
           path: ${{ github.workspace }}
           merge-multiple: true
 
