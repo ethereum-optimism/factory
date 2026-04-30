@@ -100,6 +100,23 @@ jobs:
             echo "is_fork_pr=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Setup melange
+        uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+
+      - name: Generate shared signing key
+        uses: chainguard-dev/actions/melange-keygen@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          signing-key-path: ${{ github.workspace }}/melange.rsa
+
+      - name: Upload signing key
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: melange-signing-key
+          path: |
+            ${{ github.workspace }}/melange.rsa
+            ${{ github.workspace }}/melange.rsa.pub
+          retention-days: 1
+
   # Phase 1: Build .apk packages on native runners per architecture.
   # One melange invocation per arch builds all subpackages with warm cache.
   melange:
@@ -127,10 +144,11 @@ jobs:
       - name: Setup melange
         uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
 
-      - name: Generate ephemeral signing key
-        uses: chainguard-dev/actions/melange-keygen@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+      - name: Download signing key
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          signing-key-path: ${{ github.workspace }}/melange.rsa
+          name: melange-signing-key
+          path: ${{ github.workspace }}
 
       - name: Write env file
         run: |
