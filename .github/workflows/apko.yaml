@@ -211,18 +211,12 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
           token: ${{ secrets.source_token || github.token }}
 
-      - name: Download amd64 packages
+      - name: Download packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: packages-x86_64
+          pattern: packages-*
           path: ${{ github.workspace }}
-
-      - name: Download arm64 packages
-        if: ${{ !inputs.skip_arm64 }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: packages-aarch64
-          path: ${{ github.workspace }}
+          merge-multiple: true
 
       - name: Authenticate to Google Cloud
         if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
