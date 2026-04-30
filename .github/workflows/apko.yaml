@@ -81,7 +81,7 @@ on:
 
 jobs:
   safety-checklist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
       is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
@@ -195,7 +195,7 @@ jobs:
   # Downloads .apk artifacts from all arches, publishes each service image.
   apko:
     needs: [safety-checklist, melange]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
       id-token: write
@@ -320,7 +320,7 @@ jobs:
     strategy:
       matrix:
         service: ${{ fromJSON(needs.apko.outputs.services_json) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
       id-token: write
