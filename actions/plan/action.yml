@@ -25,14 +25,21 @@ inputs:
 outputs:
   matrix_json:
     description: >
-      JSON array of build entries; each entry is a fully populated set of
-      inputs for factory/.github/workflows/docker.yaml, plus a normalized
-      "tests" array (defaulting to []) that callers can pass to
-      factory/.github/workflows/integration-test.yaml.
+      JSON array of build entries for factory/.github/workflows/docker.yaml
+      (build/bake/ko/single-image apko modes).
     value: ${{ steps.plan.outputs.matrix_json }}
+  groups_matrix_json:
+    description: >
+      JSON array of group build entries for factory/.github/workflows/apko.yaml
+      (melange+apko group builds). Each entry has melange_config, services,
+      apko_config_dir, and other group-level fields.
+    value: ${{ steps.plan.outputs.groups_matrix_json }}
   has_builds:
     description: 'Whether any builds are planned (true/false)'
     value: ${{ steps.plan.outputs.has_builds }}
+  has_group_builds:
+    description: 'Whether any group builds are planned (true/false)'
+    value: ${{ steps.plan.outputs.has_group_builds }}
   is_release:
     description: 'True when the workflow was triggered by a tag push'
     value: ${{ steps.plan.outputs.is_release }}
@@ -119,17 +126,57 @@ runs:
           return 1
         }
 
+        # Build a group matrix entry from the groups section of the config.
+        build_group_entry() {
+          local group_name="$1" tag="$2"
+          jq -c \
+            --arg g "$group_name" \
+            --arg t "$tag" \
+            '.groups[$g] + {group_name: $g, tag: $t}
+             | del(.paths)' \
+            "$CONFIG"
+        }
+
+        # Build a group release entry: narrows services to just the tagged one.
+        build_group_release_entry() {
+          local group_name="$1" service="$2" version="$3"
+          jq -c \
+            --arg g "$group_name" \
+            --arg s "$service" \
+            --arg v "$version" \
+            '.groups[$g]
+             | . + {group_name: $g, tag: $v}
+             | .services = [$s]
+             | .smoke_test = (if (.smoke_test // [] | index($s)) then [$s] else [] end)
+             | .env = (if .env == null or .env == "" then "VERSION=" + $v else (.env | split("\n") | map(select(startswith("VERSION=") | not)) | . + ["VERSION=" + $v] | join("\n")) end)
+             | del(.paths)' \
+            "$CONFIG"
+        }
+
+        # Find which group a service belongs to. Returns the group name or empty.
+        find_group_for_service() {
+          local service="$1"
+          jq -r --arg s "$service" \
+            '.groups // {} | to_entries[] | select(.value.services | index($s)) | .key' \
+            "$CONFIG" | head -1
+        }
+
         emit() {
-          local matrix="$1" is_release="$2"
-          local has_builds
+          local matrix="$1" groups_matrix="$2" is_release="$3"
+          local has_builds has_group_builds
           has_builds=$( [[ $(echo "$matrix" | jq 'length') -gt 0 ]] && echo "true" || echo "false" )
+          has_group_builds=$( [[ $(echo "$groups_matrix" | jq 'length') -gt 0 ]] && echo "true" || echo "false" )
           {
             echo "matrix_json=$matrix"
+            echo "groups_matrix_json=$groups_matrix"
             echo "has_builds=$has_builds"
+            echo "has_group_builds=$has_group_builds"
             echo "is_release=$is_release"
           } >> "$GITHUB_OUTPUT"
           echo "matrix_json=$matrix"
+          echo "groups_matrix_json=$groups_matrix"
           echo "has_builds=$has_builds"
+          echo "has_group_builds=$has_group_builds"
           echo "is_release=$is_release"
         }
 
@@ -154,16 +201,27 @@ runs:
             VERSION="$REF_NAME"
           fi
 
-          if ! jq -e --arg n "$IMAGE_NAME" '.images[$n]' "$CONFIG" >/dev/null 2>&1; then
-            echo "::error::Image '$IMAGE_NAME' (parsed from tag '$REF_NAME') not found in $CONFIG under .images"
-            exit 1
+          # Check if the image is in .images (single-image build)
+          if jq -e --arg n "$IMAGE_NAME" '.images[$n]' "$CONFIG" >/dev/null 2>&1; then
+            echo "Resolved tag: image=$IMAGE_NAME version=$VERSION (single image)"
+            ENTRY=$(build_release_entry "$IMAGE_NAME" "$VERSION")
+            MATRIX=$(echo "[$ENTRY]" | jq -c '.')
+            emit "$MATRIX" "[]" "true"
+            exit 0
           fi
 
-          echo "Resolved tag: image=$IMAGE_NAME version=$VERSION"
-          ENTRY=$(build_release_entry "$IMAGE_NAME" "$VERSION")
-          MATRIX=$(echo "[$ENTRY]" | jq -c '.')
-          emit "$MATRIX" "true"
-          exit 0
+          # Check if the image is a service inside a group
+          GROUP_NAME=$(find_group_for_service "$IMAGE_NAME")
+          if [[ -n "$GROUP_NAME" ]]; then
+            echo "Resolved tag: service=$IMAGE_NAME in group=$GROUP_NAME version=$VERSION"
+            ENTRY=$(build_group_release_entry "$GROUP_NAME" "$IMAGE_NAME" "$VERSION")
+            GROUPS_MATRIX=$(echo "[$ENTRY]" | jq -c '.')
+            emit "[]" "$GROUPS_MATRIX" "true"
+            exit 0
+          fi
+
+          echo "::error::Image '$IMAGE_NAME' (parsed from tag '$REF_NAME') not found in $CONFIG under .images or .groups"
+          exit 1
         fi
 
         # ---------------------------------------------------------------------
@@ -174,7 +232,7 @@ runs:
           local tag="$1"
           jq -c \
             --arg t "$tag" \
-            '[.images
+            '[(.images // {})
               | to_entries[]
               | .value + {image_name: .key, tag: $t}
               | .tests = (.tests // [])
@@ -182,10 +240,22 @@ runs:
             "$CONFIG"
         }
 
+        build_full_groups_matrix() {
+          local tag="$1"
+          jq -c \
+            --arg t "$tag" \
+            '[(.groups // {})
+              | to_entries[]
+              | .value + {group_name: .key, tag: $t}
+              | del(.paths)]' \
+            "$CONFIG"
+        }
+
         if [[ "$EVENT_NAME" != "pull_request" ]]; then
-          echo "Non-PR event ($EVENT_NAME): planning all images"
+          echo "Non-PR event ($EVENT_NAME): planning all images and groups"
           MATRIX=$(build_full_matrix "$REF_NAME")
-          emit "$MATRIX" "false"
+          GROUPS_MATRIX=$(build_full_groups_matrix "$REF_NAME")
+          emit "$MATRIX" "$GROUPS_MATRIX" "false"
           exit 0
         fi
 
@@ -198,7 +268,8 @@ runs:
         if [[ -z "$CHANGED_FILES" ]]; then
           echo "::warning::Could not compute diff (shallow clone?). Planning all images as fallback."
           MATRIX=$(build_full_matrix "$REF_NAME")
-          emit "$MATRIX" "false"
+          GROUPS_MATRIX=$(build_full_groups_matrix "$REF_NAME")
+          emit "$MATRIX" "$GROUPS_MATRIX" "false"
           exit 0
         fi
 
@@ -225,7 +296,8 @@ runs:
 
         if [[ "$BUILD_ALL" == "true" ]]; then
           MATRIX=$(build_full_matrix "$REF_NAME")
-          emit "$MATRIX" "false"
+          GROUPS_MATRIX=$(build_full_groups_matrix "$REF_NAME")
+          emit "$MATRIX" "$GROUPS_MATRIX" "false"
           exit 0
         fi
 
@@ -272,20 +344,54 @@ runs:
           done <<< "$paths"
         done < <(jq -c '.images | to_entries[]' "$CONFIG")
 
-        if [[ ${#AFFECTED[@]} -eq 0 ]]; then
-          echo "No images affected by this change"
-          emit "[]" "false"
-          exit 0
+        # --- Group change detection ---
+        declare -A AFFECTED_GROUPS=()
+
+        while IFS= read -r entry; do
+          [[ -z "$entry" ]] && continue
+          group_name=$(echo "$entry" | jq -r '.key')
+          paths=$(echo "$entry" | jq -r '.value.paths[]?')
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" ]] && continue
+            while IFS= read -r file; do
+              if matches_pattern "$file" "$pattern"; then
+                echo "Group path match: $file matches $pattern -> planning group $group_name"
+                AFFECTED_GROUPS["$group_name"]=1
+                break 2
+              fi
+            done <<< "$CHANGED_FILES"
+          done <<< "$paths"
+        done < <(jq -c '(.groups // {}) | to_entries[]' "$CONFIG")
+
+        # --- Emit results ---
+
+        MATRIX="[]"
+        if [[ ${#AFFECTED[@]} -gt 0 ]]; then
+          AFFECTED_NAMES=$(printf '%s\n' "${!AFFECTED[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          MATRIX=$(echo "$AFFECTED_NAMES" | jq -c \
+            --slurpfile config "$CONFIG" \
+            --arg t "$REF_NAME" \
+            '[.[] as $name
+              | $config[0].images[$name] + {image_name: $name, tag: $t}
+              | .tests = (.tests // [])
+              | del(.paths)]')
+          echo "Affected images: $AFFECTED_NAMES"
         fi
 
-        AFFECTED_NAMES=$(printf '%s\n' "${!AFFECTED[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
-        MATRIX=$(echo "$AFFECTED_NAMES" | jq -c \
-          --slurpfile config "$CONFIG" \
-          --arg t "$REF_NAME" \
-          '[.[] as $name
-            | $config[0].images[$name] + {image_name: $name, tag: $t}
-            | .tests = (.tests // [])
-            | del(.paths)]')
+        GROUPS_MATRIX="[]"
+        if [[ ${#AFFECTED_GROUPS[@]} -gt 0 ]]; then
+          AFFECTED_GROUP_NAMES=$(printf '%s\n' "${!AFFECTED_GROUPS[@]}" | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          GROUPS_MATRIX=$(echo "$AFFECTED_GROUP_NAMES" | jq -c \
+            --slurpfile config "$CONFIG" \
+            --arg t "$REF_NAME" \
+            '[.[] as $name
+              | $config[0].groups[$name] + {group_name: $name, tag: $t}
+              | del(.paths)]')
+          echo "Affected groups: $AFFECTED_GROUP_NAMES"
+        fi
 
-        echo "Affected images: $AFFECTED_NAMES"
-        emit "$MATRIX" "false"
+        if [[ ${#AFFECTED[@]} -eq 0 && ${#AFFECTED_GROUPS[@]} -eq 0 ]]; then
+          echo "No images or groups affected by this change"
+        fi
+
+        emit "$MATRIX" "$GROUPS_MATRIX" "false"

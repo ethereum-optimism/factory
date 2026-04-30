@@ -1,0 +1,349 @@
+name: Apko Group Build (Reusable)
+# Builds multiple service images from a single melange config with subpackages.
+# melange compiles binaries (per-arch, native runners), apko assembles images.
+
+on:
+  workflow_call:
+    inputs:
+      melange_config:
+        description: 'Path to the melange config file (with subpackages for all services)'
+        required: true
+        type: string
+      services:
+        description: 'Space-separated list of service names to publish as images'
+        required: true
+        type: string
+      apko_config_dir:
+        description: 'Directory containing per-service <name>.apko.yaml files'
+        required: true
+        type: string
+      smoke_test:
+        description: 'Space-separated list of services to run --version against (subset of services)'
+        required: false
+        type: string
+        default: ''
+      registry:
+        description: 'Container registry URL (e.g., us-docker.pkg.dev/project/repo)'
+        required: true
+        type: string
+      tag:
+        description: 'Image tag for the final images'
+        required: false
+        type: string
+        default: ${{ github.ref_name }}
+      gcp_project_id:
+        description: 'GCP Project ID for OIDC auth'
+        required: false
+        type: string
+      runner_amd64:
+        description: 'Runner label for amd64 melange build'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      runner_arm64:
+        description: 'Runner label for arm64 melange build'
+        required: false
+        type: string
+        default: 'ubuntu-24.04-arm'
+      skip_arm64:
+        description: 'Skip ARM64 builds (build amd64 only)'
+        required: false
+        type: boolean
+        default: false
+      melange_workdir:
+        description: 'Subdirectory melange treats as the source root (default: repo root)'
+        required: false
+        type: string
+        default: ''
+      env:
+        description: 'Environment variables to pass into the melange sandbox (KEY=VALUE, one per line)'
+        required: false
+        type: string
+        default: ''
+      source_repo:
+        description: 'Source repository to build from (format: owner/repo)'
+        required: false
+        type: string
+        default: ''
+      source_ref:
+        description: 'Git ref to checkout'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      source_token:
+        description: 'Token for accessing source_repo when it is a private repository'
+        required: false
+
+jobs:
+  safety-checklist:
+    runs-on: ubuntu-latest
+    outputs:
+      sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
+      is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Sanitize tag
+        id: sanitize
+        run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
+
+      - name: Check if we are in a fork PR
+        id: fork-check
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            echo "is_fork_pr=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_fork_pr=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup melange
+        uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+
+      - name: Generate shared signing key
+        uses: chainguard-dev/actions/melange-keygen@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          signing-key-path: ${{ github.workspace }}/melange.rsa
+
+      - name: Upload signing key
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: melange-signing-key
+          path: |
+            ${{ github.workspace }}/melange.rsa
+            ${{ github.workspace }}/melange.rsa.pub
+          retention-days: 1
+
+  # Phase 1: Build .apk packages on native runners per architecture.
+  # One melange invocation per arch builds all subpackages with warm cache.
+  melange:
+    needs: safety-checklist
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(inputs.skip_arm64 && format('[{{"arch":"x86_64","runner":"{0}"}}]', inputs.runner_amd64) || format('[{{"arch":"x86_64","runner":"{0}"}},{{"arch":"aarch64","runner":"{1}"}}]', inputs.runner_amd64, inputs.runner_arm64)) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
+        with:
+          repository: ${{ inputs.source_repo || github.repository }}
+          ref: ${{ inputs.source_ref || github.sha }}
+          token: ${{ secrets.source_token || github.token }}
+
+      - name: Setup melange
+        uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+
+      - name: Download signing key
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: melange-signing-key
+          path: ${{ github.workspace }}
+
+      - name: Write env file
+        run: |
+          GIT_DATE=$(git show -s --format='%ct')
+          cat > ${{ github.workspace }}/melange.env << EOF
+          GIT_COMMIT=${{ github.sha }}
+          GIT_DATE=${GIT_DATE}
+          EOF
+          if [[ -n '${{ inputs.env }}' ]]; then
+            cat >> ${{ github.workspace }}/melange.env << 'ENVEOF'
+          ${{ inputs.env }}
+          ENVEOF
+          fi
+
+      - name: Build packages
+        run: |
+          SOURCE_DIR="${{ github.workspace }}"
+          [[ -n '${{ inputs.melange_workdir }}' ]] && SOURCE_DIR="${{ github.workspace }}/${{ inputs.melange_workdir }}"
+
+          sudo melange build ${{ inputs.melange_config }} \
+            --arch ${{ matrix.arch }} \
+            --signing-key ${{ github.workspace }}/melange.rsa \
+            --out-dir ${{ github.workspace }}/packages \
+            --source-dir "${SOURCE_DIR}" \
+            --env-file ${{ github.workspace }}/melange.env \
+            --git-commit ${{ github.sha }} \
+            --git-repo-url https://github.com/${{ github.repository }}
+
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packages-${{ matrix.arch }}
+          path: |
+            packages/
+            melange.rsa.pub
+          if-no-files-found: error
+          retention-days: 1
+
+  # Phase 2: Assemble and publish multi-arch OCI images.
+  # Downloads .apk artifacts from all arches, publishes each service image.
+  apko:
+    needs: [safety-checklist, melange]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digests: ${{ steps.publish.outputs.digests }}
+      services_json: ${{ steps.services.outputs.json }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
+        with:
+          repository: ${{ inputs.source_repo || github.repository }}
+          ref: ${{ inputs.source_ref || github.sha }}
+          token: ${{ secrets.source_token || github.token }}
+
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: packages-*
+          path: ${{ github.workspace }}
+          merge-multiple: true
+
+      - name: Authenticate to Google Cloud
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        id: auth
+        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
+        with:
+          project_id: ${{ inputs.gcp_project_id }}
+          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get registry access token
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        id: ar-token
+        run: echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
+
+      - name: Pull apko SDK
+        run: docker pull ghcr.io/wolfi-dev/sdk:latest
+
+      - name: Publish service images
+        id: publish
+        run: |
+          ARCHS="${{ inputs.skip_arm64 && 'x86_64' || 'x86_64,aarch64' }}"
+          REGISTRY_HOST=$(echo '${{ inputs.registry }}' | cut -d'/' -f1)
+
+          LOGIN_CMD=""
+          if [[ -n "${{ steps.ar-token.outputs.token }}" ]]; then
+            LOGIN_CMD="echo '${{ steps.ar-token.outputs.token }}' | /usr/bin/apko login -u oauth2accesstoken --password-stdin ${REGISTRY_HOST} &&"
+          fi
+
+          DIGESTS="{}"
+          for svc in ${{ inputs.services }}; do
+            echo "::group::Publishing ${svc}"
+            REF=$(docker run --rm --network host --entrypoint /bin/sh \
+              -v ${{ github.workspace }}:${{ github.workspace }} \
+              -w ${{ github.workspace }} \
+              ghcr.io/wolfi-dev/sdk:latest \
+              -c "${LOGIN_CMD} /usr/bin/apko publish \
+                ${{ inputs.apko_config_dir }}/${svc}.apko.yaml \
+                ${{ inputs.registry }}/${svc}:${{ github.sha }} \
+                --arch ${ARCHS} \
+                -k ${{ github.workspace }}/melange.rsa.pub \
+                -r ${{ github.workspace }}/packages")
+
+            DIGEST="${REF##*@}"
+            echo "Published ${svc}: ${DIGEST}"
+            DIGESTS=$(echo "$DIGESTS" | jq -c --arg s "$svc" --arg d "$DIGEST" '. + {($s): $d}')
+            echo "::endgroup::"
+          done
+
+          echo "digests=${DIGESTS}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag images
+        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        run: |
+          gcloud auth configure-docker $(echo '${{ inputs.registry }}' | cut -d'/' -f1) --quiet
+          TAG="${{ needs.safety-checklist.outputs.sanitized_tag }}"
+          for svc in ${{ inputs.services }}; do
+            IMAGE="${{ inputs.registry }}/${svc}"
+            echo "Tagging ${svc}:${TAG}"
+            docker buildx imagetools create \
+              -t "${IMAGE}:${TAG}" \
+              "${IMAGE}:${{ github.sha }}"
+          done
+
+      - name: Smoke test
+        if: inputs.smoke_test != ''
+        run: |
+          for svc in ${{ inputs.smoke_test }}; do
+            echo "::group::Testing ${svc}"
+            docker run --rm ${{ inputs.registry }}/${svc}:${{ github.sha }} --version
+            echo "::endgroup::"
+          done
+
+      - name: Summary
+        run: |
+          DIGESTS='${{ steps.publish.outputs.digests }}'
+          {
+            echo "## Apko Group Build"
+            echo ""
+            echo "| Service | Digest |"
+            echo "|---|---|"
+            for svc in ${{ inputs.services }}; do
+              DIGEST=$(echo "$DIGESTS" | jq -r --arg s "$svc" '.[$s]')
+              echo "| \`${svc}\` | \`${DIGEST}\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build services JSON
+        id: services
+        run: |
+          JSON=$(echo '${{ inputs.services }}' | tr ' ' '\n' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "json=${JSON}" >> "$GITHUB_OUTPUT"
+
+  attest:
+    needs: [safety-checklist, apko]
+    if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+    strategy:
+      matrix:
+        service: ${{ fromJSON(needs.apko.outputs.services_json) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
+        with:
+          project_id: ${{ inputs.gcp_project_id }}
+          workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+
+      - name: Login to GCP Artifact Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ inputs.registry }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.auth_token }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-name: ${{ inputs.registry }}/${{ matrix.service }}
+          subject-digest: ${{ fromJSON(needs.apko.outputs.digests)[matrix.service] }}
+          push-to-registry: true
