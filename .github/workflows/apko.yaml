@@ -97,9 +97,19 @@ jobs:
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
 
+      # Check out factory at the workflow's own ref so the local
+      # actions/fork-context composite action resolves consistently with the
+      # workflow body, including on PR branches that haven't merged yet.
+      - name: Checkout factory at workflow ref
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.workflow_sha }}
+          path: __factory__
+
       - name: Compute fork context
         id: fork_ctx
-        uses: ethereum-optimism/factory/actions/fork-context@main
+        uses: ./__factory__/actions/fork-context
         with:
           canonical_registry: ${{ inputs.registry }}
 
