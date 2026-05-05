@@ -97,6 +97,17 @@ jobs:
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
 
+      # Resolve the factory ref this reusable workflow was loaded from. In a
+      # called workflow, `github.workflow_ref` looks like
+      # `ethereum-optimism/factory/.github/workflows/apko.yaml@<sha>`. The
+      # trailing component is the factory commit. `github.workflow_sha` would
+      # return the caller's commit SHA, not factory's, so it cannot be used.
+      - name: Resolve factory ref
+        id: factory_ref
+        run: |
+          ref="${GITHUB_WORKFLOW_REF##*@}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
       # Check out factory at the workflow's own ref so the local
       # actions/fork-context composite action resolves consistently with the
       # workflow body, including on PR branches that haven't merged yet.
@@ -104,7 +115,7 @@ jobs:
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v4
         with:
           repository: ethereum-optimism/factory
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.factory_ref.outputs.ref }}
           path: __factory__
 
       - name: Compute fork context
