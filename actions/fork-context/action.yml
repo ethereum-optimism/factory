@@ -1,0 +1,48 @@
+name: 'Fork context'
+description: >
+  Compute fork-PR context: whether this run is from a fork PR, which
+  registry to push to (canonical or ttl.sh fallback), and whether to
+  authenticate to GCP and attest provenance. Single source of truth so
+  docker.yaml, apko.yaml, and any future build mode share the same fork
+  policy.
+inputs:
+  canonical_registry:
+    description: 'Registry to use on push, tag, and non-fork PR. Required.'
+    required: true
+outputs:
+  is_fork:
+    description: '"true" if this run is a pull_request from a fork, else "false".'
+    value: ${{ steps.compute.outputs.is_fork }}
+  registry:
+    description: 'Effective registry: canonical_registry on non-fork; ttl.sh/<sha> on fork.'
+    value: ${{ steps.compute.outputs.registry }}
+  should_authenticate:
+    description: '"true" when GCP auth + provenance attestation should run.'
+    value: ${{ steps.compute.outputs.should_authenticate }}
+runs:
+  using: 'composite'
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        CANONICAL: ${{ inputs.canonical_registry }}
+        SHA: ${{ github.sha }}
+        EVENT_NAME: ${{ github.event_name }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        is_fork="false"
+        if [[ "$EVENT_NAME" == "pull_request" && -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+          is_fork="true"
+        fi
+        if [[ "$is_fork" == "true" ]]; then
+          registry="ttl.sh/${SHA}"
+          should_authenticate="false"
+        else
+          registry="$CANONICAL"
+          should_authenticate="true"
+        fi
+        echo "is_fork=$is_fork" >> "$GITHUB_OUTPUT"
+        echo "registry=$registry" >> "$GITHUB_OUTPUT"
+        echo "should_authenticate=$should_authenticate" >> "$GITHUB_OUTPUT"

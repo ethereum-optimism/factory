@@ -84,7 +84,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sanitized_tag: ${{ steps.sanitize.outputs.sanitized_tag }}
-      is_fork_pr: ${{ steps.fork-check.outputs.is_fork_pr }}
+      is_fork: ${{ steps.fork_ctx.outputs.is_fork }}
+      registry: ${{ steps.fork_ctx.outputs.registry }}
+      should_authenticate: ${{ steps.fork_ctx.outputs.should_authenticate }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
@@ -95,14 +97,37 @@ jobs:
         id: sanitize
         run: echo "sanitized_tag=$(echo ${{ inputs.tag }} | sed 's/[^a-zA-Z0-9.]/-/g')" >> $GITHUB_OUTPUT
 
-      - name: Check if we are in a fork PR
-        id: fork-check
+      # Compute fork-PR context inline. The logic mirrors the composite
+      # `actions/fork-context` action in this repo, but is inlined here because
+      # a reusable workflow called from another repository has no reliable way
+      # to check out the called workflow's own commit (neither
+      # `github.workflow_sha` nor `github.workflow_ref` resolves to the
+      # called-workflow ref in that context). Keep this in lockstep with
+      # `actions/fork-context/action.yml`.
+      - name: Compute fork context
+        id: fork_ctx
+        env:
+          CANONICAL: ${{ inputs.registry }}
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
-            echo "is_fork_pr=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_fork_pr=false" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          is_fork="false"
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+            is_fork="true"
           fi
+          if [[ "$is_fork" == "true" ]]; then
+            registry="ttl.sh/${SHA}"
+            should_authenticate="false"
+          else
+            registry="$CANONICAL"
+            should_authenticate="true"
+          fi
+          echo "is_fork=$is_fork" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "should_authenticate=$should_authenticate" >> "$GITHUB_OUTPUT"
 
       - name: Setup melange
         uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
@@ -223,7 +248,7 @@ jobs:
           merge-multiple: true
 
       - name: Authenticate to Google Cloud
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
         id: auth
         uses: google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d # v3
         with:
@@ -232,7 +257,7 @@ jobs:
           create_credentials_file: true
 
       - name: Get registry access token
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
         id: ar-token
         run: echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
 
@@ -241,9 +266,11 @@ jobs:
 
       - name: Publish service images
         id: publish
+        env:
+          EFFECTIVE_REGISTRY: ${{ needs.safety-checklist.outputs.registry }}
         run: |
           ARCHS="${{ inputs.skip_arm64 && 'x86_64' || 'x86_64,aarch64' }}"
-          REGISTRY_HOST=$(echo '${{ inputs.registry }}' | cut -d'/' -f1)
+          REGISTRY_HOST=$(echo "${EFFECTIVE_REGISTRY}" | cut -d'/' -f1)
 
           LOGIN_CMD=""
           if [[ -n "${{ steps.ar-token.outputs.token }}" ]]; then
@@ -259,7 +286,7 @@ jobs:
               ghcr.io/wolfi-dev/sdk:latest \
               -c "${LOGIN_CMD} /usr/bin/apko publish \
                 ${{ inputs.apko_config_dir }}/${svc}.apko.yaml \
-                ${{ inputs.registry }}/${svc}:${{ github.sha }} \
+                ${EFFECTIVE_REGISTRY}/${svc}:${{ github.sha }} \
                 --arch ${ARCHS} \
                 -k ${{ github.workspace }}/melange.rsa.pub \
                 -r ${{ github.workspace }}/packages")
@@ -273,12 +300,14 @@ jobs:
           echo "digests=${DIGESTS}" >> "$GITHUB_OUTPUT"
 
       - name: Tag images
-        if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+        if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
+        env:
+          EFFECTIVE_REGISTRY: ${{ needs.safety-checklist.outputs.registry }}
         run: |
-          gcloud auth configure-docker $(echo '${{ inputs.registry }}' | cut -d'/' -f1) --quiet
+          gcloud auth configure-docker "$(echo "${EFFECTIVE_REGISTRY}" | cut -d'/' -f1)" --quiet
           TAG="${{ needs.safety-checklist.outputs.sanitized_tag }}"
           for svc in ${{ inputs.services }}; do
-            IMAGE="${{ inputs.registry }}/${svc}"
+            IMAGE="${EFFECTIVE_REGISTRY}/${svc}"
             echo "Tagging ${svc}:${TAG}"
             docker buildx imagetools create \
               -t "${IMAGE}:${TAG}" \
@@ -290,7 +319,7 @@ jobs:
         run: |
           for svc in ${{ inputs.smoke_test }}; do
             echo "::group::Testing ${svc}"
-            docker run --rm ${{ inputs.registry }}/${svc}:${{ github.sha }} --version
+            docker run --rm ${{ needs.safety-checklist.outputs.registry }}/${svc}:${{ github.sha }} --version
             echo "::endgroup::"
           done
 
@@ -316,7 +345,7 @@ jobs:
 
   attest:
     needs: [safety-checklist, apko]
-    if: needs.safety-checklist.outputs.is_fork_pr == 'false' && inputs.gcp_project_id != ''
+    if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
     strategy:
       matrix:
         service: ${{ fromJSON(needs.apko.outputs.services_json) }}
