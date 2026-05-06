@@ -37,6 +37,16 @@ on:
         required: false
         type: boolean
         default: false
+      runner_amd64:
+        description: 'Runner label for amd64 builds. Also used for the single multi-arch runner in apko mode.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      runner_arm64:
+        description: 'Runner label for arm64 builds. Ignored when skip_arm64 is true or mode is apko.'
+        required: false
+        type: string
+        default: 'ubuntu-24.04-arm'
       env:
         description: 'Environment variables to set before build (KEY=VALUE format, one per line)'
         required: false
@@ -186,7 +196,7 @@ jobs:
         # apko builds multi-arch natively in a single invocation, so the job runs
         # once on an amd64 runner and emits a manifest index covering every
         # requested arch. build/bake/ko stay on their native per-arch matrix.
-        include: ${{ fromJSON(inputs.mode == 'apko' && '[{"platform":"multi","runner":"ubuntu-latest"}]' || inputs.skip_arm64 && '[{"platform":"linux/amd64","runner":"ubuntu-latest"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
+        include: ${{ fromJSON(inputs.mode == 'apko' && format('[{{"platform":"multi","runner":"{0}"}}]', inputs.runner_amd64) || inputs.skip_arm64 && format('[{{"platform":"linux/amd64","runner":"{0}"}}]', inputs.runner_amd64) || format('[{{"platform":"linux/amd64","runner":"{0}"}},{{"platform":"linux/arm64","runner":"{1}"}}]', inputs.runner_amd64, inputs.runner_arm64)) }}
     runs-on: ${{ matrix.runner }}
 
     steps:
