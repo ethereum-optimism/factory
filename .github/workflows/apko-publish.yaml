@@ -42,12 +42,6 @@ on:
         required: false
         type: string
         default: x86_64,aarch64
-      melange-attestation-signer-repo:
-        description: Repository that signs melange APK attestations.
-        required: false
-        type: string
-        default: ethereum-optimism/factory
-
 jobs:
   publish:
     name: publish
@@ -97,10 +91,10 @@ jobs:
         if: inputs.needs-melange-apks != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          MELANGE_ATTESTATION_SIGNER_REPO: ${{ inputs.melange-attestation-signer-repo }}
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
+          melange_signer_workflow="ethereum-optimism/factory/.github/workflows/melange-build.yaml"
           apks=(packages-*/**/*.apk)
           [ "${#apks[@]}" -gt 0 ] || { echo "no APK files under packages-*/" >&2; exit 1; }
           for apk in "${apks[@]}"; do
@@ -108,7 +102,7 @@ jobs:
               sleep "$delay"
               gh attestation verify "$apk" \
                 --repo "$GITHUB_REPOSITORY" \
-                --signer-repo "$MELANGE_ATTESTATION_SIGNER_REPO" \
+                --signer-workflow "$melange_signer_workflow" \
                 --source-digest "$GITHUB_SHA" && continue 2
             done
             echo "attestation verification failed for $apk" >&2
