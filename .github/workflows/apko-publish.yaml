@@ -156,7 +156,7 @@ jobs:
           APKO_ARCHS: ${{ inputs.archs }}
           APKO_GENERIC_USER: oauth2accesstoken
           APKO_GENERIC_PASS: ${{ steps.ar_token.outputs.token }}
-          DIGEST_FILE: ${{ runner.temp }}/apko-${{ inputs.service }}.digest
+          DIGEST_FILE: /tmp/apko-${{ github.run_id }}-${{ inputs.service }}.digest
         run: |
           set -euo pipefail
           docker run -i --rm --entrypoint /bin/bash \
