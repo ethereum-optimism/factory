@@ -67,9 +67,9 @@ on:
         type: string
         default: ''
     secrets:
-      NEXUS_APP_ID:
+      SOURCE_CHECKOUT_APP_ID:
         required: false
-      NEXUS_APP_PRIVATE_KEY:
+      SOURCE_CHECKOUT_APP_PRIVATE_KEY:
         required: false
 
 jobs:
@@ -94,13 +94,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate source checkout app credentials
+        if: inputs.use-github-app-token
+        env:
+          SOURCE_CHECKOUT_APP_ID: ${{ secrets.SOURCE_CHECKOUT_APP_ID }}
+          SOURCE_CHECKOUT_APP_PRIVATE_KEY: ${{ secrets.SOURCE_CHECKOUT_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SOURCE_CHECKOUT_APP_ID" || -z "$SOURCE_CHECKOUT_APP_PRIVATE_KEY" ]]; then
+            echo "SOURCE_CHECKOUT_APP_ID and SOURCE_CHECKOUT_APP_PRIVATE_KEY are required when use-github-app-token is true" >&2
+            exit 1
+          fi
+
       - name: Generate GitHub App token
         if: inputs.use-github-app-token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ secrets.NEXUS_APP_ID }}
-          private-key: ${{ secrets.NEXUS_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.SOURCE_CHECKOUT_APP_ID }}
+          private-key: ${{ secrets.SOURCE_CHECKOUT_APP_PRIVATE_KEY }}
           owner: ethereum-optimism
 
       - name: Checkout source repository
