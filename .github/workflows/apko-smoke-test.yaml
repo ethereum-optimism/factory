@@ -1,0 +1,87 @@
+# Reusable stage-3 job: smoke test one published apko image for one arch.
+name: apko smoke test
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Image / apko config basename (e.g. op-node).
+        required: true
+        type: string
+      registry:
+        description: OCI registry prefix (no trailing slash).
+        required: true
+        type: string
+      arch:
+        description: OCI platform architecture (amd64 or arm64).
+        required: true
+        type: string
+      runner:
+        description: GitHub Actions runner label for this smoke leg.
+        required: true
+        type: string
+      smoke-test:
+        description: Comma-separated smoke commands.
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Authenticate to Google Cloud (image pull)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: oplabs-tools-artifacts
+          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get Artifact Registry token
+        id: ar_token
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.ar_token.outputs.token }}
+
+      - name: Smoke test
+        env:
+          IMAGE: ${{ inputs.registry }}/${{ inputs.service }}:${{ github.sha }}
+          IMAGE_ARCH: ${{ inputs.arch }}
+          SMOKE_TEST: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra tests <<< "$SMOKE_TEST"
+          for test in "${tests[@]}"; do
+            test="${test#"${test%%[![:space:]]*}"}"
+            test="${test%"${test##*[![:space:]]}"}"
+            [ -n "$test" ] || continue
+            read -ra parts <<< "$test"
+            [ "${#parts[@]}" -gt 0 ] || continue
+            entrypoint="${parts[0]}"
+            args=("${parts[@]:1}")
+            echo "==> docker run --platform linux/$IMAGE_ARCH --entrypoint $entrypoint ... ${args[*]}"
+            rc=0
+            docker run --rm --platform "linux/$IMAGE_ARCH" --entrypoint "$entrypoint" "$IMAGE" "${args[@]}" || rc=$?
+            if [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] \
+               || { [ "$rc" -ge 129 ] && [ "$rc" -le 159 ]; }; then
+              echo "FAIL: $entrypoint could not run (exit $rc)"
+              exit 1
+            fi
+          done

@@ -1,0 +1,242 @@
+# Reusable melange stage-1 job (one keyword × arch leg). Builds unsigned APKs.
+name: melange build
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: Melange keyword (artifact basename and default melange/<stack>.yaml).
+        required: true
+        type: string
+      arch:
+        description: Melange target architecture (x86_64 or aarch64).
+        required: true
+        type: string
+      runner:
+        description: GitHub Actions runner label for this leg.
+        required: true
+        type: string
+      melange-config:
+        description: Melange YAML path relative to repo root. Defaults to melange/<stack>.yaml.
+        required: false
+        type: string
+        default: ''
+      source-repository:
+        description: Source git repository (owner/name). Used only when checkout-source is true.
+        required: false
+        type: string
+        default: ''
+      source-ref:
+        description: Git ref for the source repository.
+        required: false
+        type: string
+        default: ''
+      source-path:
+        description: Checkout path for the source repository.
+        required: false
+        type: string
+        default: '.'
+      checkout-source:
+        description: Checkout a separate source repository before building.
+        required: false
+        type: boolean
+        default: false
+      source-submodules:
+        description: |
+          Submodule checkout mode for the source repository. Use "recursive"
+          only for packages that need source submodules.
+        required: false
+        type: string
+        default: 'false'
+      use-github-app-token:
+        description: Checkout source with the NEXUS GitHub App token (private repos).
+        required: false
+        type: boolean
+        default: false
+      use-gha-cache:
+        description: Persist melange-cache/ across runs via actions/cache.
+        required: false
+        type: boolean
+        default: false
+      cache-key-files:
+        description: |
+          Comma-separated lockfiles to hash into the cache key (paths relative
+          to the workspace root, present after source checkout). Used when
+          use-gha-cache is true.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      NEXUS_APP_ID:
+        required: false
+      NEXUS_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  build:
+    name: build
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      MELANGE_CONFIG: ${{ inputs.melange-config != '' && inputs.melange-config || format('melange/{0}.yaml', inputs.stack) }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Generate GitHub App token
+        if: inputs.use-github-app-token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.NEXUS_APP_ID }}
+          private-key: ${{ secrets.NEXUS_APP_PRIVATE_KEY }}
+          owner: ethereum-optimism
+
+      - name: Checkout source repository
+        if: inputs.checkout-source
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ${{ inputs.source-repository != '' && inputs.source-repository || github.repository }}
+          ref: ${{ inputs.source-ref }}
+          path: ${{ inputs.source-path }}
+          token: ${{ inputs.use-github-app-token && steps.app-token.outputs.token || github.token }}
+          submodules: ${{ inputs.source-submodules }}
+          persist-credentials: false
+
+      - name: Decide melange cache access
+        if: inputs.use-gha-cache
+        id: cache-policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          restore=false
+          save=false
+          reason="untrusted-ref"
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then
+              restore=true
+              reason="internal-pr-restore-only"
+            else
+              reason="fork-pr-no-cache"
+            fi
+          elif [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            restore=true
+            save=true
+            reason="default-branch-read-write"
+          fi
+
+          {
+            echo "restore=$restore"
+            echo "save=$save"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          echo "melange-cache policy: restore=$restore save=$save reason=$reason"
+
+      - name: Compute melange cache key
+        if: |
+          steps.cache-policy.outputs.restore == 'true' ||
+          steps.cache-policy.outputs.save == 'true'
+        id: cache-key
+        run: |
+          set -euo pipefail
+          key="melange-v2-${{ inputs.stack }}-${{ inputs.arch }}"
+          files="${{ inputs.cache-key-files }}"
+          if [ -n "$files" ]; then
+            IFS=',' read -ra paths <<< "$files"
+            hash_inputs=()
+            for path in "${paths[@]}"; do
+              path="${path#"${path%%[![:space:]]*}"}"
+              path="${path%"${path##*[![:space:]]}"}"
+              [ -n "$path" ] || continue
+              if [ ! -f "$path" ]; then
+                echo "cache key file missing: $path" >&2
+                exit 1
+              fi
+              hash_inputs+=("$path")
+            done
+            if [ "${#hash_inputs[@]}" -gt 0 ]; then
+              key="${key}-$(sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
+            fi
+          fi
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore melange cache
+        if: steps.cache-policy.outputs.restore == 'true'
+        id: melange-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: melange-cache
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            melange-v2-${{ inputs.stack }}-${{ inputs.arch }}-
+
+      - name: Report restored cache
+        if: steps.cache-policy.outputs.restore == 'true'
+        run: |
+          echo "cache-hit=${{ steps.melange-cache.outputs.cache-hit }}"
+          echo "cache-primary-key=${{ steps.melange-cache.outputs.cache-primary-key }}"
+          du -sh melange-cache 2>/dev/null || echo "melange-cache: (empty)"
+
+      - name: Install melange
+        uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        with:
+          version: v0.50.8
+
+      - name: Prepare melange cache directory
+        run: mkdir -p melange-cache
+
+      - name: Build packages
+        run: |
+          sudo melange build "${{ env.MELANGE_CONFIG }}" \
+            --arch "${{ inputs.arch }}" \
+            --out-dir "${{ github.workspace }}/packages" \
+            --source-dir "${{ github.workspace }}/${{ inputs.source-path }}" \
+            --cache-dir "${{ github.workspace }}/melange-cache" \
+            --pipeline-dir "${{ github.workspace }}/pipelines"
+
+      - name: Fix output permissions
+        run: sudo chown -R "$(id -u):$(id -g)" packages melange-cache
+
+      - name: Report cache after build
+        if: steps.cache-policy.outputs.restore == 'true'
+        run: du -sh melange-cache/* 2>/dev/null || du -sh melange-cache
+
+      - name: Save melange cache
+        if: |
+          steps.cache-policy.outputs.save == 'true' &&
+          steps.melange-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: melange-cache
+          key: ${{ steps.cache-key.outputs.key }}
+
+      - name: Attest APK provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: "${{ github.workspace }}/packages/**/*.apk"
+          show-summary: false
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: apks-${{ inputs.stack }}-${{ inputs.arch }}
+          path: |
+            ${{ github.workspace }}/packages/

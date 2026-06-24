@@ -1,0 +1,37 @@
+name: Apko plan
+description: |
+  Plan melange, apko, and smoke CI matrices from a nexus catalog JSON file.
+  On pull_request, only affected images and their melange dependencies are
+  included. Requires actions/checkout with fetch-depth 0 on pull_request.
+
+inputs:
+  config:
+    description: Path to the catalog JSON file (e.g. catalog/monorepo.json).
+    required: true
+
+outputs:
+  melange_matrix_json:
+    description: JSON array of melange matrix entries for melange-build.yaml.
+    value: ${{ steps.plan.outputs.melange_matrix_json }}
+  apko_matrix_json:
+    description: JSON array of apko matrix entries (service, needs_melange_apks, archs, publish_tag).
+    value: ${{ steps.plan.outputs.apko_matrix_json }}
+  smoke_matrix_json:
+    description: JSON array of smoke matrix entries (service, arch, runner, smoke_test).
+    value: ${{ steps.plan.outputs.smoke_matrix_json }}
+  has_builds:
+    description: Whether any apko images are planned (true/false).
+    value: ${{ steps.plan.outputs.has_builds }}
+  is_release:
+    description: Whether this plan came from a release tag.
+    value: ${{ steps.plan.outputs.is_release }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan melange and apko matrices
+      id: plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        "${GITHUB_ACTION_PATH}/apko-plan.sh" "${{ inputs.config }}"

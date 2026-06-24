@@ -1,0 +1,220 @@
+# Reusable stage-2 job: verify melange APK attestations, publish one apko image.
+name: apko publish
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Image / apko config basename (e.g. op-node).
+        required: true
+        type: string
+      needs-melange-apks:
+        description: >-
+          Comma-separated melange keywords (melange/<keyword>.yaml basenames).
+          Each keyword pulls apks-<keyword>-{x86_64,aarch64} into its own
+          packages-<keyword>/ repo for --repository-append. Example:
+          op-stack-go or op-stack-go,op-stack-rust,cannon for op-challenger.
+          Leave empty for apko-only images with no local APK dependencies.
+        required: false
+        type: string
+        default: ''
+      registry:
+        description: OCI registry prefix (no trailing slash).
+        required: true
+        type: string
+      publish-tag:
+        description: Extra mutable image tag to publish alongside the SHA tag. Defaults to the sanitized Git ref name.
+        required: false
+        type: string
+        default: ''
+      apko-config:
+        description: apko YAML path relative to repo root. Defaults to apko/<service>.yaml.
+        required: false
+        type: string
+        default: ''
+      archs:
+        description: Comma-separated apko publish architectures.
+        required: false
+        type: string
+        default: amd64,arm64
+      melange-archs:
+        description: Comma-separated melange artifact arch suffixes to download (e.g. x86_64 or x86_64,aarch64).
+        required: false
+        type: string
+        default: x86_64,aarch64
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+      actions: read
+    env:
+      APKO_CONFIG: ${{ inputs.apko-config != '' && inputs.apko-config || format('apko/{0}.yaml', inputs.service) }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Download melange APK repositories
+        if: inputs.needs-melange-apks != ''
+        id: apk-repos
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS_MELANGE_APKS: ${{ inputs.needs-melange-apks }}
+          MELANGE_ARCHS: ${{ inputs.melange-archs }}
+        run: |
+          set -euo pipefail
+          repos=""
+          for keyword in ${NEEDS_MELANGE_APKS//,/ }; do
+            dir="${GITHUB_WORKSPACE}/packages-${keyword}"
+            mkdir -p "$dir"
+            repos="${repos:+$repos,}$dir"
+            for arch in ${MELANGE_ARCHS//,/ }; do
+              gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+                -n "apks-${keyword}-${arch}" -D "$dir"
+            done
+          done
+          [ -n "$repos" ] || { echo "needs-melange-apks is empty after parsing" >&2; exit 1; }
+          echo "paths=$repos" >> "$GITHUB_OUTPUT"
+
+      - name: Verify melange APK attestations
+        if: inputs.needs-melange-apks != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          apks=(packages-*/**/*.apk)
+          [ "${#apks[@]}" -gt 0 ] || { echo "no APK files under packages-*/" >&2; exit 1; }
+          for apk in "${apks[@]}"; do
+            for delay in 0 5 10 20 30 30; do
+              sleep "$delay"
+              gh attestation verify "$apk" --repo "$GITHUB_REPOSITORY" --source-digest "$GITHUB_SHA" && continue 2
+            done
+            echo "attestation verification failed for $apk" >&2
+            exit 1
+          done
+
+      - name: Authenticate to Google Cloud (image push)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: oplabs-tools-artifacts
+          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get Artifact Registry token
+        id: ar_token
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.ar_token.outputs.token }}
+
+      - name: Compute image tags
+        id: image-tags
+        env:
+          IMAGE: ${{ inputs.registry }}/${{ inputs.service }}
+          PUBLISH_TAG: ${{ inputs.publish-tag }}
+        run: |
+          set -euo pipefail
+          ref_tag="${PUBLISH_TAG:-$GITHUB_REF_NAME}"
+          sanitized_ref="$(printf '%s' "$ref_tag" | sed 's/[^a-zA-Z0-9.]/-/g')"
+          {
+            echo "image=$IMAGE"
+            echo "sha=${GITHUB_SHA}"
+            echo "ref=${sanitized_ref}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image
+        id: apko-publish
+        env:
+          APKO_CONFIG: ${{ env.APKO_CONFIG }}
+          APKO_TAG: ${{ steps.image-tags.outputs.image }}:${{ steps.image-tags.outputs.sha }}
+          APKO_EXTRA_TAGS: ${{ steps.image-tags.outputs.image }}:${{ steps.image-tags.outputs.ref }}
+          APKO_REPOSITORY_APPEND: ${{ steps.apk-repos.outputs.paths }}
+          APKO_ARCHS: ${{ inputs.archs }}
+          APKO_GENERIC_USER: oauth2accesstoken
+          APKO_GENERIC_PASS: ${{ steps.ar_token.outputs.token }}
+          DIGEST_FILE: ${{ runner.temp }}/apko-${{ inputs.service }}.digest
+        run: |
+          set -euo pipefail
+          docker run -i --rm --entrypoint /bin/bash \
+            --network host \
+            -v "$PWD:${GITHUB_WORKSPACE}" \
+            -v /tmp:/tmp \
+            --workdir "${GITHUB_WORKSPACE}" \
+            -e APKO_CONFIG \
+            -e APKO_TAG \
+            -e APKO_EXTRA_TAGS \
+            -e APKO_REPOSITORY_APPEND \
+            -e APKO_ARCHS \
+            -e APKO_GENERIC_USER \
+            -e APKO_GENERIC_PASS \
+            -e DIGEST_FILE \
+            ghcr.io/wolfi-dev/sdk:latest <<'APKO_EOF'
+          set -euo pipefail
+
+          if [[ -n "$APKO_GENERIC_USER" && -n "$APKO_GENERIC_PASS" ]]; then
+            echo "$APKO_GENERIC_PASS" | \
+              /usr/bin/apko login -u "$APKO_GENERIC_USER" \
+                --password-stdin "$(echo "$APKO_TAG" | cut -d'/' -f1)"
+          fi
+
+          export SOURCE_DATE_EPOCH=0
+          tags=("$APKO_TAG")
+          if [[ -n "$APKO_EXTRA_TAGS" ]]; then
+            IFS=',' read -ra extra_tags <<< "$APKO_EXTRA_TAGS"
+            for tag in "${extra_tags[@]}"; do
+              tag="${tag#"${tag%%[![:space:]]*}"}"
+              tag="${tag%"${tag##*[![:space:]]}"}"
+              [[ -n "$tag" ]] && tags+=("$tag")
+            done
+          fi
+
+          repos=()
+          [[ -n "$APKO_REPOSITORY_APPEND" ]] && repos=(-r "$APKO_REPOSITORY_APPEND")
+          archs=()
+          [[ -n "$APKO_ARCHS" ]] && archs=(--arch "$APKO_ARCHS")
+
+          /usr/bin/apko publish \
+            --ignore-signatures \
+            "$APKO_CONFIG" "${tags[@]}" \
+            "${repos[@]}" "${archs[@]}" | tee "$DIGEST_FILE"
+          APKO_EOF
+
+          digest="$(tail -n 1 "$DIGEST_FILE")"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Extract digest
+        if: steps.apko-publish.outputs.digest != ''
+        id: digest
+        run: |
+          DIGEST="${{ steps.apko-publish.outputs.digest }}"
+          echo "sha=${DIGEST##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest image build provenance
+        if: steps.digest.outputs.sha != ''
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ inputs.registry }}/${{ inputs.service }}
+          subject-digest: ${{ steps.digest.outputs.sha }}
+          push-to-registry: true
+          show-summary: false
