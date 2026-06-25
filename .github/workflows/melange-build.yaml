@@ -223,7 +223,8 @@ jobs:
 
       - name: Build packages
         run: |
-          sudo melange build "${{ env.MELANGE_CONFIG }}" \
+          sudo env "MELANGE_CARGO_PROFILE=${MELANGE_CARGO_PROFILE}" \
+            melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
             --out-dir "${{ github.workspace }}/apk-packages" \
             --source-dir "${{ github.workspace }}/${{ inputs.source-path }}" \
