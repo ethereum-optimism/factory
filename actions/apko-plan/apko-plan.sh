@@ -228,15 +228,15 @@ plan_release_tag() {
   service_match=$(jq -r '.release.service_match // 1' "$CONFIG")
   version_match=$(jq -r '.release.version_match // 2' "$CONFIG")
 
+  if ! [[ "$service_match" =~ ^[0-9]+$ && "$version_match" =~ ^[0-9]+$ ]]; then
+    echo "::error::release.service_match and release.version_match must be numeric capture indexes" >&2
+    exit 1
+  fi
+
   if [[ ! "$REF_NAME" =~ $regex ]]; then
     echo "Tag ref '$REF_NAME' does not match release tag regex for $CONFIG; no builds"
     emit_outputs "[]" "[]" "true"
     exit 0
-  fi
-
-  if ! [[ "$service_match" =~ ^[0-9]+$ && "$version_match" =~ ^[0-9]+$ ]]; then
-    echo "::error::release.service_match and release.version_match must be numeric capture indexes" >&2
-    exit 1
   fi
   if (( service_match >= ${#BASH_REMATCH[@]} || version_match >= ${#BASH_REMATCH[@]} )); then
     echo "::error::release tag regex '$regex' did not provide capture indexes service=$service_match version=$version_match for '$REF_NAME'" >&2
