@@ -11,8 +11,8 @@ on:
       needs-melange-apks:
         description: >-
           Comma-separated melange keywords (melange/<keyword>.yaml basenames).
-          Each keyword pulls apks-<keyword>-{x86_64,aarch64} into its own
-          packages-<keyword>/ repo for --repository-append. Example:
+          Each keyword pulls apks-<keyword>-{x86_64,aarch64} into separate
+          packages-<keyword>-<arch>/ repos for --repository-append. Example:
           op-stack-go or op-stack-go,op-stack-rust,cannon for op-challenger.
           Leave empty for apko-only images with no local APK dependencies.
         required: false
@@ -76,10 +76,10 @@ jobs:
           set -euo pipefail
           repos=""
           for keyword in ${NEEDS_MELANGE_APKS//,/ }; do
-            dir="${GITHUB_WORKSPACE}/packages-${keyword}"
-            mkdir -p "$dir"
-            repos="${repos:+$repos,}$dir"
             for arch in ${MELANGE_ARCHS//,/ }; do
+              dir="${GITHUB_WORKSPACE}/packages-${keyword}-${arch}"
+              mkdir -p "$dir"
+              repos="${repos:+$repos,}$dir"
               gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
                 -n "apks-${keyword}-${arch}" -D "$dir"
             done
