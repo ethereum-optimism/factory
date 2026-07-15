@@ -67,7 +67,7 @@ on:
         type: string
         default: ''
       cargo-profile:
-        description: Cargo profile exported to Melange build pipelines.
+        description: Cargo profile exported to melange pipelines that opt into profile selection.
         required: false
         type: string
         default: ''
@@ -223,15 +223,16 @@ jobs:
 
       - name: Build packages
         run: |
-          sudo melange build "${{ env.MELANGE_CONFIG }}" \
+          sudo env "MELANGE_CARGO_PROFILE=${MELANGE_CARGO_PROFILE}" \
+            melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
-            --out-dir "${{ github.workspace }}/packages" \
+            --out-dir "${{ github.workspace }}/apk-packages" \
             --source-dir "${{ github.workspace }}/${{ inputs.source-path }}" \
             --cache-dir "${{ github.workspace }}/melange-cache" \
             --pipeline-dir "${{ github.workspace }}/pipelines"
 
       - name: Fix output permissions
-        run: sudo chown -R "$(id -u):$(id -g)" packages melange-cache
+        run: sudo chown -R "$(id -u):$(id -g)" apk-packages melange-cache
 
       - name: Report cache after build
         if: steps.cache-policy.outputs.restore == 'true'
@@ -249,7 +250,7 @@ jobs:
       - name: Attest APK provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: "${{ github.workspace }}/packages/**/*.apk"
+          subject-path: "${{ github.workspace }}/apk-packages/**/*.apk"
           show-summary: false
 
       - name: Upload APK artifact
@@ -257,4 +258,4 @@ jobs:
         with:
           name: apks-${{ inputs.stack }}-${{ inputs.arch }}
           path: |
-            ${{ github.workspace }}/packages/
+            ${{ github.workspace }}/apk-packages/
