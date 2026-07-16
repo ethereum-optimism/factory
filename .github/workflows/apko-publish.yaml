@@ -98,7 +98,8 @@ jobs:
           apks=(packages-*/**/*.apk)
           [ "${#apks[@]}" -gt 0 ] || { echo "no APK files under packages-*/" >&2; exit 1; }
           for apk in "${apks[@]}"; do
-            for delay in 0 5 10 20 30 30; do
+            # ~8m of backoff total, to ride out multi-minute attestations API outages
+            for delay in 0 15 30 60 120 240; do
               sleep "$delay"
               gh attestation verify "$apk" \
                 --repo "$GITHUB_REPOSITORY" \
