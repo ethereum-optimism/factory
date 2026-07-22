@@ -432,6 +432,15 @@ jobs:
         with:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      # buildx imagetools resolves registry credentials by host, not by the
+      # full repo path that docker/login-action registers. Register the
+      # host-level gcloud credential helper so the by-digest pulls in
+      # `imagetools create` authenticate against private registries.
+      - name: Configure Docker for GCP Artifact Registry
+        if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
       - name: Login to GCP Artifact Registry
         if: needs.safety-checklist.outputs.should_authenticate == 'true' && inputs.gcp_project_id != ''
@@ -506,6 +515,14 @@ jobs:
         with:
           project_id: ${{ inputs.gcp_project_id }}
           workload_identity_provider: projects/${{ inputs.gcp_project_id }}/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      # attest-build-provenance with push-to-registry pulls the manifest by
+      # digest, which buildx/oras resolves by registry host. Register the
+      # host-level gcloud credential helper so that pull authenticates against
+      # private registries.
+      - name: Configure Docker for GCP Artifact Registry
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
       - name: Login to GCP Artifact Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
