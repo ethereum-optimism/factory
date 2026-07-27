@@ -274,7 +274,9 @@ runs:
         fi
 
         echo "Changed files:"
-        echo "$CHANGED_FILES" | head -50
+        # herestring instead of a pipe: under pipefail, `echo | head` dies with
+        # EPIPE when the changed-file list outlives head's 50 lines
+        head -50 <<< "$CHANGED_FILES"
         TOTAL=$(echo "$CHANGED_FILES" | wc -l)
         echo "($TOTAL files total)"
 
