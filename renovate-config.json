@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "description": "Shared org baseline: CVE-only policy. Disable all generic version updates; raise PRs only for GitHub + OSV vulnerability advisories. Consume via \"extends\": [\"github>ethereum-optimism/factory:renovate-config\"].",
+  "packageRules": [
+    {
+      "description": "Turn OFF all generic version updates.",
+      "matchPackageNames": ["*"],
+      "enabled": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "description": "Overrides the disable-all rule above so ONLY security fixes get PRs.",
+    "enabled": true,
+    "labels": ["security", "renovate-cve"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate CVE Dashboard",
+  "postUpdateOptions": ["gomodTidy"],
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
+  "rebaseWhen": "conflicted",
+  "semanticCommits": "disabled",
+  "commitMessagePrefix": "security:"
+}

@@ -14,6 +14,9 @@ and validate them with service-owned integration tests.
 - `.github/workflows/integration-test.yaml` — reusable integration-test
   workflow. Runs one or more service-owned test suites against a built image,
   with optional per-suite kind clusters.
+- `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
+  `renovate-config.json` — shared CVE-only Renovate baseline preset. See
+  [Renovate](#renovate).
 - `actions/detect-changes`, `actions/parse-tag` — legacy composite actions
   retained for compatibility; new consumers should use `actions/plan`.
 
@@ -173,6 +176,58 @@ env:
 Release tags are `<image_name>/v<semver>`, e.g. `my-service/v1.2.3`. Repos
 with a single image in `images.json` may use a bare `v<semver>` tag. `plan`
 rejects malformed tags and tags that do not match any image in the config.
+
+## Renovate
+
+Shared self-hosted Renovate delivery: a reusable workflow plus a CVE-only
+config baseline, so each consumer repo carries only a thin caller and a thin
+`renovate.json`.
+
+- `.github/workflows/renovate.yaml` — reusable workflow (`workflow_call`) that
+  mints an org Renovate GitHub App token and runs the Renovate engine against
+  the calling repo. Credentials and execution stay in our infra.
+- `renovate-config.json` — the org baseline preset. Disables all generic
+  version updates and raises PRs only for GitHub + OSV vulnerability advisories
+  (CVE-only). Consume it from a repo's `renovate.json` via `extends`.
+
+The `schedule` / `workflow_dispatch` triggers live in each consumer's caller
+(a reusable workflow cannot own a `schedule`). The Renovate GitHub App
+credentials (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`) are org-level
+secrets, reached via `secrets: inherit`.
+
+```yaml
+# .github/workflows/renovate.yaml in each consumer repo
+name: Renovate
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        type: string
+        default: "info"
+      dryRun:
+        type: boolean
+        default: false
+jobs:
+  renovate:
+    uses: ethereum-optimism/factory/.github/workflows/renovate.yaml@<pinned-sha>
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      logLevel: ${{ inputs.logLevel || 'info' }}
+      dryRun: ${{ inputs.dryRun || false }}
+```
+
+```json
+// renovate.json in each consumer repo — extend the baseline, then add any
+// repo-specific tweaks (grouping, extra labels, etc.)
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>ethereum-optimism/factory:renovate-config"]
+}
+```
 
 ## Non-goals
 
