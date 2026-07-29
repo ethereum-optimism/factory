@@ -18,7 +18,8 @@
   "dependencyDashboard": true,
   "dependencyDashboardTitle": "Renovate CVE Dashboard",
   "postUpdateOptions": ["gomodTidy"],
-  "prConcurrentLimit": 5,
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
   "rebaseWhen": "conflicted",
   "semanticCommits": "disabled",
   "commitMessagePrefix": "security:"
