@@ -191,8 +191,9 @@ config baseline, so each consumer repo carries only a thin caller and a thin
   (CVE-only). Consume it from a repo's `renovate.json` via `extends`.
 
 The `schedule` / `workflow_dispatch` triggers live in each consumer's caller
-(a reusable workflow cannot own a `schedule`). The App credentials are passed
-through as secrets.
+(a reusable workflow cannot own a `schedule`). The Renovate GitHub App
+credentials (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`) are org-level
+secrets, reached via `secrets: inherit`.
 
 ```yaml
 # .github/workflows/renovate.yaml in each consumer repo
@@ -213,9 +214,7 @@ jobs:
     uses: ethereum-optimism/factory/.github/workflows/renovate.yaml@<pinned-sha>
     permissions:
       contents: read
-    secrets:
-      RENOVATE_APP_ID: ${{ secrets.RENOVATE_APP_ID }}
-      RENOVATE_APP_PRIVATE_KEY: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+    secrets: inherit
     with:
       logLevel: ${{ inputs.logLevel || 'info' }}
       dryRun: ${{ inputs.dryRun || false }}

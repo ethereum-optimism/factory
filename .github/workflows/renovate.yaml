@@ -4,6 +4,9 @@ name: Renovate (Reusable)
 # Execution + credentials stay in our infra (no third-party write access).
 # CVE-only policy lives in each repo's renovate.json, which extends
 # github>ethereum-optimism/factory:renovate-config.
+#
+# The Renovate GitHub App credentials (RENOVATE_APP_ID / RENOVATE_APP_PRIVATE_KEY)
+# are org-level secrets reached via `secrets: inherit` in the caller.
 
 on:
   workflow_call:
@@ -16,11 +19,6 @@ on:
         description: "Dry run (no PRs)."
         type: boolean
         default: false
-    secrets:
-      RENOVATE_APP_ID:
-        required: true
-      RENOVATE_APP_PRIVATE_KEY:
-        required: true
 
 permissions:
   contents: read
