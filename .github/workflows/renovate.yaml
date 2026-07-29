@@ -1,0 +1,55 @@
+name: Renovate (Reusable)
+
+# Self-hosted Renovate engine, run inside our own GitHub Actions.
+# Execution + credentials stay in our infra (no third-party write access).
+# CVE-only policy lives in each repo's renovate.json, which extends
+# github>ethereum-optimism/factory:renovate-config.
+
+on:
+  workflow_call:
+    inputs:
+      logLevel:
+        description: "Renovate log level (debug|info|warn)."
+        type: string
+        default: "info"
+      dryRun:
+        description: "Dry run (no PRs)."
+        type: boolean
+        default: false
+      repositories:
+        description: "Repo(s) for Renovate to operate on. Defaults to the calling repo."
+        type: string
+        default: ""
+    secrets:
+      RENOVATE_APP_ID:
+        required: true
+      RENOVATE_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      # Mint a short-lived installation token for the org-owned Renovate GitHub App.
+      # Bot identity, no PAT to rotate. PRs opened with this token DO trigger CI
+      # (unlike GITHUB_TOKEN, whose PRs are skipped by GitHub loop-prevention).
+      - name: Generate Renovate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - name: Renovate
+        uses: renovatebot/github-action@3064367f740a1a91cca218698a63902689cce200 # v46.1.20
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+        env:
+          RENOVATE_REPOSITORIES: ${{ inputs.repositories != '' && inputs.repositories || github.repository }}
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: "required"
+          LOG_LEVEL: ${{ inputs.logLevel }}
+          RENOVATE_DRY_RUN: ${{ inputs.dryRun && 'full' || null }}
