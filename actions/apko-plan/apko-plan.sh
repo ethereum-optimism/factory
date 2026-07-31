@@ -82,6 +82,7 @@ emit_outputs() {
           service: $image.service,
           arch: $arch,
           runner: smoke_runner($smoke_runners; $arch),
+          expected_version: ($image.expected_version // ""),
           smoke_test: $image.smoke_test
         }]
   ')
@@ -141,6 +142,7 @@ pipelines_for_melange_config() {
 build_apko_matrix() {
   local -n _images="$1"
   local publish_tag="${2:-$REF_NAME}"
+  local build_version="${3:-}"
   local apko_archs
   apko_archs=$(jq -r '.apko_archs // "amd64,arm64"' "$CONFIG")
   local names_json
@@ -149,6 +151,7 @@ build_apko_matrix() {
     --argjson names "$names_json" \
     --arg apko_archs "$apko_archs" \
     --arg publish_tag "$publish_tag" \
+    --arg expected_version "$build_version" \
     '
       [.images as $images | $names[] as $name
         | $images[$name]
@@ -157,6 +160,7 @@ build_apko_matrix() {
             needs_melange_apks: (.needs_melange | join(",")),
             archs: (.apko_archs // $apko_archs),
             publish_tag: $publish_tag,
+            expected_version: $expected_version,
             smoke_test: (.smoke_test // "")
           }
       ]
@@ -175,6 +179,7 @@ runner_for() {
 build_melange_matrix() {
   local -n _keywords="$1"
   local source_ref_override="${2:-}"
+  local build_version="${3:-}"
   local melange_archs_json
   melange_archs_json=$(jq -c '.melange_archs // ["x86_64","aarch64"]' "$CONFIG")
   local keywords_json
@@ -183,6 +188,7 @@ build_melange_matrix() {
     --argjson keywords "$keywords_json" \
     --argjson melange_archs "$melange_archs_json" \
     --arg source_ref_override "$source_ref_override" \
+    --arg build_version "$build_version" \
     '
       def runner($kw; $arch):
         (.melange[$kw].runners[$arch]
@@ -194,6 +200,7 @@ build_melange_matrix() {
             stack: $kw,
             arch: $arch,
             runner: runner($kw; $arch),
+            build_version: $build_version,
             melange_config: ($cfg.config // ("melange/" + $kw + ".yaml")),
             checkout_source: (($cfg.source // null) != null),
             source_repository: ($cfg.source.repository // ""),
@@ -427,8 +434,8 @@ fi
 mapfile -t SORTED_IMAGES < <(printf '%s\n' "${AFFECTED_IMAGES[@]}" | sort -u)
 mapfile -t SORTED_MELANGE < <(printf '%s\n' "${!AFFECTED_MELANGE[@]}" | sort -u)
 
-APKO_MATRIX=$(build_apko_matrix SORTED_IMAGES "$PUBLISH_TAG")
-MELANGE_MATRIX=$(build_melange_matrix SORTED_MELANGE "$RELEASE_SOURCE_REF")
+APKO_MATRIX=$(build_apko_matrix SORTED_IMAGES "$PUBLISH_TAG" "$RELEASE_VERSION")
+MELANGE_MATRIX=$(build_melange_matrix SORTED_MELANGE "$RELEASE_SOURCE_REF" "$RELEASE_VERSION")
 
 echo "Affected images: ${SORTED_IMAGES[*]}"
 echo "Melange keywords: ${SORTED_MELANGE[*]}"

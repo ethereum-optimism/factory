@@ -1,0 +1,26 @@
+name: apko plan tests
+
+on:
+  pull_request:
+    paths:
+      - actions/apko-plan/**
+      - .github/workflows/apko-plan-test.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - actions/apko-plan/**
+      - .github/workflows/apko-plan-test.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+      - name: Test apko planner
+        run: actions/apko-plan/apko-plan.test.sh

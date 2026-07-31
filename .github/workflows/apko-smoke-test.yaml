@@ -24,6 +24,11 @@ on:
         description: Comma-separated smoke commands.
         required: true
         type: string
+      expected-version:
+        description: Release version that at least one smoke command must report. Empty disables validation.
+        required: false
+        type: string
+        default: ''
 
 jobs:
   smoke:
@@ -65,8 +70,11 @@ jobs:
           IMAGE: ${{ inputs.registry }}/${{ inputs.service }}:${{ github.sha }}
           IMAGE_ARCH: ${{ inputs.arch }}
           SMOKE_TEST: ${{ inputs.smoke-test }}
+          EXPECTED_VERSION: ${{ inputs.expected-version }}
         run: |
           set -euo pipefail
+          version_matched=false
+          normalized_version="${EXPECTED_VERSION#v}"
           IFS=',' read -ra tests <<< "$SMOKE_TEST"
           for test in "${tests[@]}"; do
             test="${test#"${test%%[![:space:]]*}"}"
@@ -77,11 +85,21 @@ jobs:
             entrypoint="${parts[0]}"
             args=("${parts[@]:1}")
             echo "==> docker run --platform linux/$IMAGE_ARCH --entrypoint $entrypoint ... ${args[*]}"
-            rc=0
-            docker run --rm --platform "linux/$IMAGE_ARCH" --entrypoint "$entrypoint" "$IMAGE" "${args[@]}" || rc=$?
+            set +e
+            output=$(docker run --rm --platform "linux/$IMAGE_ARCH" --entrypoint "$entrypoint" "$IMAGE" "${args[@]}" 2>&1)
+            rc=$?
+            set -e
+            printf '%s\n' "$output"
+            if [[ -n "$normalized_version" && "$output" == *"$normalized_version"* ]]; then
+              version_matched=true
+            fi
             if [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] \
-               || { [ "$rc" -ge 129 ] && [ "$rc" -le 159 ]; }; then
+              || { [ "$rc" -ge 129 ] && [ "$rc" -le 159 ]; }; then
               echo "FAIL: $entrypoint could not run (exit $rc)"
               exit 1
             fi
           done
+          if [[ -n "$normalized_version" && "$version_matched" != "true" ]]; then
+            echo "FAIL: no smoke command reported expected version $EXPECTED_VERSION" >&2
+            exit 1
+          fi
