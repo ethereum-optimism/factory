@@ -73,6 +73,10 @@ jobs:
           EXPECTED_VERSION: ${{ inputs.expected-version }}
         run: |
           set -euo pipefail
+          if ! docker info >/dev/null 2>&1; then
+            echo "FAIL: Docker daemon is unavailable on runner ${{ inputs.runner }}" >&2
+            exit 1
+          fi
           version_matched=false
           normalized_version="${EXPECTED_VERSION#v}"
           IFS=',' read -ra tests <<< "$SMOKE_TEST"
