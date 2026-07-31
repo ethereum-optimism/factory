@@ -71,6 +71,11 @@ on:
         required: false
         type: string
         default: ''
+      build-version:
+        description: Release version exported to builds as GIT_VERSION. Empty for non-release builds.
+        required: false
+        type: string
+        default: ''
     secrets:
       SOURCE_CHECKOUT_APP_ID:
         required: false
@@ -89,6 +94,7 @@ jobs:
     env:
       MELANGE_CONFIG: ${{ inputs.melange-config != '' && inputs.melange-config || format('melange/{0}.yaml', inputs.stack) }}
       MELANGE_CARGO_PROFILE: ${{ inputs.cargo-profile }}
+      MELANGE_BUILD_VERSION: ${{ inputs.build-version }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -221,9 +227,24 @@ jobs:
       - name: Prepare melange cache directory
         run: mkdir -p melange-cache
 
+      - name: Compute source metadata
+        id: source-metadata
+        env:
+          SOURCE_PATH: ${{ inputs.source-path }}
+        run: |
+          set -euo pipefail
+          source_dir="${GITHUB_WORKSPACE}/${SOURCE_PATH}"
+          echo "commit=$(git -C "$source_dir" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git -C "$source_dir" show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build packages
         run: |
-          sudo env "MELANGE_CARGO_PROFILE=${MELANGE_CARGO_PROFILE}" \
+          sudo env \
+            "MELANGE_CARGO_PROFILE=${MELANGE_CARGO_PROFILE}" \
+            "GIT_VERSION=${MELANGE_BUILD_VERSION}" \
+            "GIT_COMMIT=${{ steps.source-metadata.outputs.commit }}" \
+            "GIT_DATE=${{ steps.source-metadata.outputs.date }}" \
+            "BUILD_PROFILE=${MELANGE_CARGO_PROFILE}" \
             melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
             --out-dir "${{ github.workspace }}/apk-packages" \
