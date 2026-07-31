@@ -160,7 +160,7 @@ build_apko_matrix() {
             needs_melange_apks: (.needs_melange | join(",")),
             archs: (.apko_archs // $apko_archs),
             publish_tag: $publish_tag,
-            expected_version: $expected_version,
+            expected_version: (if (.verify_version // false) then $expected_version else "" end),
             smoke_test: (.smoke_test // "")
           }
       ]

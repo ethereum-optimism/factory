@@ -24,6 +24,7 @@ cat > "$CONFIG" <<'JSON'
     "widget": {
       "type": "go",
       "needs_melange": ["stack"],
+      "verify_version": true,
       "smoke_test": "widget --version"
     }
   }
