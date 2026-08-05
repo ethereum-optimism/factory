@@ -1,0 +1,36 @@
+name: Agent Approval Check
+description: Require distinct write-capable human approvals for agent-authored pull requests
+
+inputs:
+  github_token:
+    description: Token with pull-requests:write and statuses:write permissions
+    default: ${{ github.token }}
+  required_approvals:
+    description: Number of distinct human approvals required
+    default: "2"
+  agent_emails:
+    description: Comma-separated commit author or committer emails treated as agents
+    default: noreply@anthropic.com
+  agent_logins:
+    description: Comma-separated GitHub logins treated as agents
+    default: claude[bot],claude-code[bot]
+  excluded_approvers:
+    description: Comma-separated machine-user logins that never count as humans
+    default: ""
+  protected_bases:
+    description: Comma-separated protected base branches; empty means the default branch
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Evaluate agent approvals
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REQUIRED_APPROVALS: ${{ inputs.required_approvals }}
+        AGENT_EMAILS: ${{ inputs.agent_emails }}
+        AGENT_LOGINS: ${{ inputs.agent_logins }}
+        EXCLUDED_APPROVERS: ${{ inputs.excluded_approvers }}
+        PROTECTED_BASES: ${{ inputs.protected_bases }}
+      run: python3 "${{ github.action_path }}/agent_approval_check.py"

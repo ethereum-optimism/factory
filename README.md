@@ -19,6 +19,9 @@ and validate them with service-owned integration tests.
   [Renovate](#renovate).
 - `actions/detect-changes`, `actions/parse-tag` — legacy composite actions
   retained for compatibility; new consumers should use `actions/plan`.
+- `actions/agent-approval-check` — dependency-free approval gate for
+  agent-authored pull requests. Requires distinct write-capable human approvals
+  and publishes the `agent-approval-check` commit status.
 
 ## `images.json`
 
