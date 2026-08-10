@@ -2,6 +2,12 @@ name: Dependency Review (Reusable)
 
 on:
   workflow_call:
+    inputs:
+      config-file:
+        description: Path to a repo-local dependency-review config (e.g. allow-ghsas exceptions).
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -18,3 +24,4 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
+          config-file: ${{ inputs.config-file }}
