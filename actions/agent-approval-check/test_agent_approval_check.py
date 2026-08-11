@@ -176,6 +176,26 @@ class HelpersTest(unittest.TestCase):
             approval.resolve_pr_number("issue_comment", {"issue": {"number": 8}})
         )
 
+    def test_merge_group_head_sha_parsed(self):
+        self.assertEqual(
+            approval.merge_group_head_sha({"merge_group": {"head_sha": HEAD}}), HEAD
+        )
+        self.assertEqual(approval.merge_group_head_sha({}), "")
+
+    def test_evaluate_merge_group_posts_success(self):
+        api = FakeAPI()
+        approval.evaluate_merge_group(api, {"merge_group": {"head_sha": HEAD}})
+        self.assertEqual(
+            api.statuses[-1],
+            (HEAD, "success", "Approved before entering the merge queue"),
+        )
+
+    def test_evaluate_merge_group_rejects_invalid_sha(self):
+        api = FakeAPI()
+        with self.assertRaises(approval.APIError):
+            approval.evaluate_merge_group(api, {"merge_group": {"head_sha": "nope"}})
+        self.assertEqual(api.statuses, [])
+
     def test_pagination_link_parser(self):
         header = (
             '<https://api.github.com/resource?page=2>; rel="next", '

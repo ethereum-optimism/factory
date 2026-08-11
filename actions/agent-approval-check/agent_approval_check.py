@@ -99,6 +99,17 @@ def resolve_pr_number(event_name: str, event: dict[str, Any]) -> int | None:
     raise ValueError(f"unsupported event: {event_name}")
 
 
+def merge_group_head_sha(event: dict[str, Any]) -> str:
+    return str(((event.get("merge_group") or {}).get("head_sha")) or "")
+
+
+def evaluate_merge_group(client: "GitHubAPI", event: dict[str, Any]) -> None:
+    head_sha = merge_group_head_sha(event)
+    if not re.fullmatch(r"[a-f0-9]{40}", head_sha, re.IGNORECASE):
+        raise APIError("merge_group event has an invalid head SHA")
+    client.post_status(head_sha, "success", "Approved before entering the merge queue")
+
+
 def protected_bases(config: Config, default_branch: str) -> tuple[str, ...]:
     return config.protected_bases or (default_branch,)
 
@@ -493,6 +504,10 @@ def main() -> int:
         if not event_path:
             raise ValueError("GITHUB_EVENT_PATH is required")
         event = json.loads(Path(event_path).read_text())
+        if event_name == "merge_group":
+            client = GitHubAPI(os.environ.get("GH_TOKEN", ""), repository)
+            evaluate_merge_group(client, event)
+            return 0
         pr_number = resolve_pr_number(event_name, event)
         if pr_number is None:
             print("Event is not associated with a pull request")
