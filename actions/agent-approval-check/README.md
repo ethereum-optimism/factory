@@ -44,6 +44,7 @@ jobs:
           agent_logins: claude[bot],claude-code[bot]
           excluded_approvers: OptimismBot
           protected_bases: main
+          agent_branch_prefixes: ""
 ```
 
 Make the exact `agent-approval-check` commit status required on every protected
@@ -56,6 +57,9 @@ An agent-authored pull request is detected when any of these conditions holds:
 
 - The pull-request author matches `agent_logins`.
 - A commit author or committer email matches `agent_emails`.
+- The head branch starts with one of `agent_branch_prefixes`. This detects
+  agents that open pull requests from a shared account and commit under an
+  identity that would otherwise be unsafe to gate.
 - An agent identity submits an approving review.
 - The pull request has more than 100 commits and cannot be fully inspected.
 

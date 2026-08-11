@@ -20,6 +20,9 @@ inputs:
   protected_bases:
     description: Comma-separated protected base branches; empty means the default branch
     default: ""
+  agent_branch_prefixes:
+    description: Comma-separated head-branch prefixes treated as agent-authored
+    default: ""
 
 runs:
   using: composite
@@ -33,4 +36,5 @@ runs:
         AGENT_LOGINS: ${{ inputs.agent_logins }}
         EXCLUDED_APPROVERS: ${{ inputs.excluded_approvers }}
         PROTECTED_BASES: ${{ inputs.protected_bases }}
+        AGENT_BRANCH_PREFIXES: ${{ inputs.agent_branch_prefixes }}
       run: python3 "${{ github.action_path }}/agent_approval_check.py"

@@ -37,6 +37,7 @@ class Config:
     agent_logins: frozenset[str]
     excluded_approvers: frozenset[str]
     protected_bases: tuple[str, ...]
+    agent_branch_prefixes: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -58,6 +59,7 @@ class Config:
                 value.lower() for value in csv("EXCLUDED_APPROVERS")
             ),
             protected_bases=tuple(csv("PROTECTED_BASES")),
+            agent_branch_prefixes=tuple(csv("AGENT_BRANCH_PREFIXES")),
         )
 
 
@@ -126,6 +128,11 @@ def detect_agent_activity(
     login = user_login(pr)
     if login.lower() in config.agent_logins:
         return True, f"Pull request was created by {login}"
+
+    head_ref = str(((pr.get("head") or {}).get("ref")) or "")
+    for prefix in config.agent_branch_prefixes:
+        if prefix and head_ref.startswith(prefix):
+            return True, f"Head branch {head_ref} matches agent prefix {prefix}"
 
     for review in reviews:
         login = user_login(review)

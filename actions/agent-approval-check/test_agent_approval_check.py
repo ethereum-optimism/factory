@@ -40,13 +40,14 @@ def commit(email="human@example.com"):
     }
 
 
-def config(required=2, excluded=()):
+def config(required=2, excluded=(), branch_prefixes=()):
     return approval.Config(
         required_approvals=required,
         agent_emails=frozenset({"noreply@anthropic.com"}),
         agent_logins=frozenset({"claude[bot]", "claude-code[bot]"}),
         excluded_approvers=frozenset(value.lower() for value in excluded),
         protected_bases=("main",),
+        agent_branch_prefixes=tuple(branch_prefixes),
     )
 
 
@@ -133,6 +134,21 @@ class HelpersTest(unittest.TestCase):
         pr = {"user": user("Claude[bot]", "Bot")}
         found, _ = approval.detect_agent_activity(pr, [commit()], False, [], config())
         self.assertTrue(found)
+
+    def test_agent_branch_prefix_detected_regardless_of_identity(self):
+        pr = {"user": user("bot-account"), "head": {"sha": HEAD, "ref": "agent/some-change"}}
+        found, reason = approval.detect_agent_activity(
+            pr, [commit("shared@example.com")], False, [], config(branch_prefixes=("agent/",))
+        )
+        self.assertTrue(found)
+        self.assertIn("agent/", reason)
+
+    def test_non_agent_branch_prefix_not_detected(self):
+        pr = {"user": user("bot-account"), "head": {"sha": HEAD, "ref": "feature/other-change"}}
+        found, _ = approval.detect_agent_activity(
+            pr, [commit("human@example.com")], False, [], config(branch_prefixes=("agent/",))
+        )
+        self.assertFalse(found)
 
     def test_more_than_one_hundred_commits_fails_closed(self):
         pr = {"user": user("human")}
