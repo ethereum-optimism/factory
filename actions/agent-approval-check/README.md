@@ -21,9 +21,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
+  merge_group:
 
 concurrency:
-  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_ref }}
   cancel-in-progress: true
 
 permissions:
@@ -50,6 +51,13 @@ jobs:
 Make the exact `agent-approval-check` commit status required on every protected
 base branch. Land and exercise the workflow before making the status required,
 otherwise existing pull requests may be blocked without a status.
+
+If the base branch uses a merge queue, keep the `merge_group` trigger. A required
+status check must also report on merge-group commits, or queued pull requests are
+dropped after the merge-queue check timeout. On a `merge_group` event the action
+posts `success` immediately: a pull request can only enter the queue after branch
+protection (including this check on the pull-request head) has already passed, so
+the approval requirement was enforced before the merge-group commit was created.
 
 ## Approval behavior
 
