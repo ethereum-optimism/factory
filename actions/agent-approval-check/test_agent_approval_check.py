@@ -167,6 +167,12 @@ class HelpersTest(unittest.TestCase):
         )
         self.assertEqual(
             approval.resolve_pr_number(
+                "pull_request_review", {"pull_request": {"number": 11}}
+            ),
+            11,
+        )
+        self.assertEqual(
+            approval.resolve_pr_number(
                 "issue_comment",
                 {"issue": {"number": 8, "pull_request": {"url": "x"}}},
             ),
