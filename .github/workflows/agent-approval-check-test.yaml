@@ -1,0 +1,23 @@
+name: Agent approval check tests
+
+on:
+  pull_request:
+    paths:
+      - actions/agent-approval-check/**
+      - .github/workflows/agent-approval-check-test.yaml
+  push:
+    branches: [main]
+    paths:
+      - actions/agent-approval-check/**
+      - .github/workflows/agent-approval-check-test.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+      - name: Run unit tests
+        run: python3 -m unittest discover -s actions/agent-approval-check -p 'test_*.py' -v
