@@ -10,7 +10,7 @@ commit SHA.
 
 ## Workflow
 
-Both triggers execute the workflow from the trusted base branch. Do not check
+Every trigger executes the workflow from the trusted base branch. Do not check
 out or execute pull-request code in this workflow.
 
 ```yaml
@@ -19,6 +19,8 @@ name: agent-approval-check
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
   issue_comment:
     types: [created]
   merge_group:
@@ -77,10 +79,13 @@ access and is neither a GitHub Bot nor listed in `agent_logins` or
 comment whose first line is exactly `/approve <current-head-sha>`. SHA prefixes
 must contain at least 12 hexadecimal characters.
 
-Native reviews do not trigger this workflow because `pull_request_review` does
-not provide the same trusted base-workflow semantics. After a native approval,
-post `/approve <current-head-sha>` or another pull-request comment to reevaluate
-immediately. Duplicate approval mechanisms from one login still count once.
+Native approving reviews trigger reevaluation through the `pull_request_review`
+event, so a normal GitHub Approve is picked up immediately. This action never
+checks out or executes pull-request code — it only reads the API and posts a
+status from its pinned action code — so the merge-ref concern that leads some
+workflows to omit `pull_request_review` does not apply here. Commenting
+`/approve <current-head-sha>` remains available as an equivalent path. Duplicate
+approval mechanisms from one login still count once.
 
 Every evaluation first posts a pending status on the current head SHA. Errors
 thereafter leave that required status non-successful. A new head SHA invalidates
@@ -104,13 +109,10 @@ so this prevents approval evidence from one pull request unblocking another.
   already-trusted pusher. Closing it at the platform level needs a dedicated
   GitHub App publishing check runs via the Checks API plus an app-scoped required
   check; that is a deliberate follow-up, not implemented here.
-- An agent approving review submitted after a human-only pull request already
-  received a `No agent activity` success does not re-evaluate, because the
-  `pull_request_review` event is intentionally not used (it lacks the trusted
-  base-workflow semantics). Push a commit or comment to force re-evaluation.
-- Only `issue_comment.created` re-runs the gate. Editing or deleting a counted
-  `/approve` comment does not re-run it; the next push or comment re-evaluates
-  and `/approve` comments are already invalidated by any new head SHA.
+- Editing or deleting a counted `/approve` comment does not re-run the gate on
+  its own (only `issue_comment.created` fires). The next push, review, or comment
+  re-evaluates, and `/approve` comments are already invalidated by any new head
+  SHA.
 
 ## Required repository controls
 

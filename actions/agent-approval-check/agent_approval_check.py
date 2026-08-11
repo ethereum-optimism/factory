@@ -89,7 +89,7 @@ def sha_matches(prefix: str, sha: str) -> bool:
 
 
 def resolve_pr_number(event_name: str, event: dict[str, Any]) -> int | None:
-    if event_name == "pull_request_target":
+    if event_name in ("pull_request_target", "pull_request_review"):
         return int(event["pull_request"]["number"])
     if event_name == "issue_comment":
         issue = event.get("issue") or {}
