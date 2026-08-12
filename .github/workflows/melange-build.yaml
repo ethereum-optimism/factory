@@ -165,6 +165,9 @@ jobs:
             restore=true
             save=true
             reason="default-branch-read-write"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            restore=true
+            reason="tag-restore-only"
           fi
 
           {
