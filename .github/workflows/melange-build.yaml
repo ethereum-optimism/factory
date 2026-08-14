@@ -242,18 +242,22 @@ jobs:
 
       - name: Build packages
         run: |
-          sudo env \
-            "MELANGE_CARGO_PROFILE=${MELANGE_CARGO_PROFILE}" \
-            "GIT_VERSION=${MELANGE_BUILD_VERSION}" \
-            "GIT_COMMIT=${{ steps.source-metadata.outputs.commit }}" \
-            "GIT_DATE=${{ steps.source-metadata.outputs.date }}" \
-            "BUILD_PROFILE=${MELANGE_CARGO_PROFILE}" \
+          metadata_env="${RUNNER_TEMP}/melange-build.env"
+          {
+            printf 'MELANGE_CARGO_PROFILE=%s\n' "$MELANGE_CARGO_PROFILE"
+            printf 'GIT_VERSION=%s\n' "$MELANGE_BUILD_VERSION"
+            printf 'GIT_COMMIT=%s\n' "${{ steps.source-metadata.outputs.commit }}"
+            printf 'GIT_DATE=%s\n' "${{ steps.source-metadata.outputs.date }}"
+            printf 'BUILD_PROFILE=%s\n' "$MELANGE_CARGO_PROFILE"
+          } > "$metadata_env"
+          sudo env "PATH=$PATH" \
             melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
             --out-dir "${{ github.workspace }}/apk-packages" \
             --source-dir "${{ github.workspace }}/${{ inputs.source-path }}" \
             --cache-dir "${{ github.workspace }}/melange-cache" \
-            --pipeline-dir "${{ github.workspace }}/pipelines"
+            --pipeline-dir "${{ github.workspace }}/pipelines" \
+            --env-file "$metadata_env"
 
       - name: Fix output permissions
         run: sudo chown -R "$(id -u):$(id -g)" apk-packages melange-cache
