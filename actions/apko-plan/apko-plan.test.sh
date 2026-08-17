@@ -26,6 +26,13 @@ cat > "$CONFIG" <<'JSON'
       "needs_melange": ["stack"],
       "verify_version": true,
       "smoke_test": "widget --version"
+    },
+    "gadget": {
+      "type": "go",
+      "needs_melange": ["stack"],
+      "verify_version": true,
+      "smoke_test": "gadget --version",
+      "apko_configs": ["apko/gadget.yaml", "apko/gadget-dev.yaml"]
     }
   }
 }
@@ -83,5 +90,30 @@ if [[ "$(output_value "$invalid_output" is_release)" != "true" ]]; then
   echo "invalid release tag should still set is_release=true" >&2
   exit 1
 fi
+
+# Variant fan-out: an image with apko_configs publishes one apko row per config,
+# deriving tag_suffix from the filename, without forking the melange build.
+variant_output="$TEST_DIR/variant.out"
+GITHUB_EVENT_NAME=push \
+GITHUB_REF_TYPE=tag \
+GITHUB_REF_NAME=gadget/v3.0.0 \
+GITHUB_OUTPUT="$variant_output" \
+  "$SCRIPT_DIR/apko-plan.sh" "$CONFIG"
+
+variant_apko=$(output_value "$variant_output" apko_matrix_json)
+variant_melange=$(output_value "$variant_output" melange_matrix_json)
+variant_smoke=$(output_value "$variant_output" smoke_matrix_json)
+# two apko rows: default + dev
+assert_json "$variant_apko" 'length' '2'
+assert_json "$variant_apko" '[.[].apko_config] | sort | join(",")' 'apko/gadget-dev.yaml,apko/gadget.yaml'
+# default row: no suffix, keeps its smoke test
+assert_json "$variant_apko" '[.[] | select(.tag_suffix == "")][0].apko_config' 'apko/gadget.yaml'
+assert_json "$variant_apko" '[.[] | select(.tag_suffix == "")][0].smoke_test' 'gadget --version'
+# dev row: -dev suffix, smoke suppressed (superset of default)
+assert_json "$variant_apko" '[.[] | select(.tag_suffix == "-dev")][0].apko_config' 'apko/gadget-dev.yaml'
+assert_json "$variant_apko" '[.[] | select(.tag_suffix == "-dev")][0].smoke_test' ''
+# critical: the variant must NOT duplicate the melange build (one stack leg) or smoke (default only)
+assert_json "$variant_melange" 'length' '1'
+assert_json "$variant_smoke" 'length' '1'
 
 echo "apko-plan tests passed"

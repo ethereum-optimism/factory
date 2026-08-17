@@ -154,14 +154,19 @@ build_apko_matrix() {
     --arg expected_version "$build_version" \
     '
       [.images as $images | $names[] as $name
-        | $images[$name]
+        | $images[$name] as $img
+        | ($img.apko_configs // ["apko/" + $name + ".yaml"])[] as $cfg
+        | ($cfg | sub("^apko/"; "") | sub("\\.yaml$"; "")) as $stem
+        | ($stem | ltrimstr($name)) as $tag_suffix
         | {
             service: $name,
-            needs_melange_apks: (.needs_melange | join(",")),
-            archs: (.apko_archs // $apko_archs),
+            apko_config: $cfg,
+            tag_suffix: $tag_suffix,
+            needs_melange_apks: ($img.needs_melange | join(",")),
+            archs: ($img.apko_archs // $apko_archs),
             publish_tag: $publish_tag,
-            expected_version: (if (.verify_version // false) then $expected_version else "" end),
-            smoke_test: (.smoke_test // "")
+            expected_version: (if ($img.verify_version // false) then $expected_version else "" end),
+            smoke_test: (if $tag_suffix == "" then ($img.smoke_test // "") else "" end)
           }
       ]
     ' "$CONFIG"
@@ -379,7 +384,7 @@ else
         name=$(echo "$entry" | jq -r '.key')
         [[ -n "${AFFECTED_IMAGE_SET[$name]+x}" ]] && continue
 
-        mapfile -t patterns < <(echo "$entry" | jq -r '(.value.paths // [])[], (.value.nexus_paths // [])[]')
+        mapfile -t patterns < <(echo "$entry" | jq -r '[(.value.paths // [])[], (.value.nexus_paths // [])[], (.value.apko_configs // [])[]] | .[]')
         for pattern in "${patterns[@]}"; do
           [[ -z "$pattern" ]] && continue
           while IFS= read -r file; do
