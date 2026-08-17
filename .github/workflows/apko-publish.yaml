@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ''
+      tag-suffix:
+        description: Suffix appended to both the SHA tag and the publish tag (e.g. -dev). Empty for the default variant.
+        required: false
+        type: string
+        default: ''
       archs:
         description: Comma-separated apko publish architectures.
         required: false
@@ -136,14 +141,16 @@ jobs:
         env:
           IMAGE: ${{ inputs.registry }}/${{ inputs.service }}
           PUBLISH_TAG: ${{ inputs.publish-tag }}
+          TAG_SUFFIX: ${{ inputs.tag-suffix }}
         run: |
           set -euo pipefail
           ref_tag="${PUBLISH_TAG:-$GITHUB_REF_NAME}"
           sanitized_ref="$(printf '%s' "$ref_tag" | sed 's/[^a-zA-Z0-9.]/-/g')"
+          sanitized_suffix="$(printf '%s' "$TAG_SUFFIX" | sed 's/[^a-zA-Z0-9.-]/-/g')"
           {
             echo "image=$IMAGE"
-            echo "sha=${GITHUB_SHA}"
-            echo "ref=${sanitized_ref}"
+            echo "sha=${GITHUB_SHA}${sanitized_suffix}"
+            echo "ref=${sanitized_ref}${sanitized_suffix}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and publish image

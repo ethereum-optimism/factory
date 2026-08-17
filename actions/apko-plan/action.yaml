@@ -14,7 +14,7 @@ outputs:
     description: JSON array of melange matrix entries for melange-build.yaml, including build_version on releases.
     value: ${{ steps.plan.outputs.melange_matrix_json }}
   apko_matrix_json:
-    description: JSON array of apko matrix entries (service, needs_melange_apks, archs, publish_tag, optional expected_version).
+    description: JSON array of apko matrix entries (service, apko_config, tag_suffix, needs_melange_apks, archs, publish_tag, optional expected_version). One entry per apko config when an image declares apko_configs.
     value: ${{ steps.plan.outputs.apko_matrix_json }}
   smoke_matrix_json:
     description: JSON array of smoke matrix entries (service, arch, runner, smoke_test, expected_version).
