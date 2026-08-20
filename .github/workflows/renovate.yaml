@@ -19,13 +19,17 @@ on:
         description: "Dry run (no PRs)."
         type: boolean
         default: false
+      runner:
+        description: "GitHub Actions runner label."
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
 
 jobs:
   renovate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       # Mint a short-lived installation token for the org-owned Renovate GitHub App.
       # Bot identity, no PAT to rotate. PRs opened with this token DO trigger CI
