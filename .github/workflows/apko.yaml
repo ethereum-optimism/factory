@@ -35,6 +35,11 @@ on:
         required: false
         type: string
         default: ${{ github.ref_name }}
+      tag_prefix:
+        description: 'Prefix prepended to every published tag (both the commit-SHA tag and the sanitized tag). Must be tag-safe, e.g. "apko-".'
+        required: false
+        type: string
+        default: ''
       gcp_project_id:
         description: 'GCP Project ID for OIDC auth'
         required: false
@@ -286,7 +291,7 @@ jobs:
               ghcr.io/wolfi-dev/sdk:latest \
               -c "${LOGIN_CMD} /usr/bin/apko publish \
                 ${{ inputs.apko_config_dir }}/${svc}.apko.yaml \
-                ${EFFECTIVE_REGISTRY}/${svc}:${{ github.sha }} \
+                ${EFFECTIVE_REGISTRY}/${svc}:${{ inputs.tag_prefix }}${{ github.sha }} \
                 --arch ${ARCHS} \
                 -k ${{ github.workspace }}/melange.rsa.pub \
                 -r ${{ github.workspace }}/packages")
@@ -305,13 +310,13 @@ jobs:
           EFFECTIVE_REGISTRY: ${{ needs.safety-checklist.outputs.registry }}
         run: |
           gcloud auth configure-docker "$(echo "${EFFECTIVE_REGISTRY}" | cut -d'/' -f1)" --quiet
-          TAG="${{ needs.safety-checklist.outputs.sanitized_tag }}"
+          TAG="${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }}"
           for svc in ${{ inputs.services }}; do
             IMAGE="${EFFECTIVE_REGISTRY}/${svc}"
             echo "Tagging ${svc}:${TAG}"
             docker buildx imagetools create \
               -t "${IMAGE}:${TAG}" \
-              "${IMAGE}:${{ github.sha }}"
+              "${IMAGE}:${{ inputs.tag_prefix }}${{ github.sha }}"
           done
 
       - name: Smoke test
@@ -319,7 +324,7 @@ jobs:
         run: |
           for svc in ${{ inputs.smoke_test }}; do
             echo "::group::Testing ${svc}"
-            docker run --rm ${{ needs.safety-checklist.outputs.registry }}/${svc}:${{ github.sha }} --version
+            docker run --rm ${{ needs.safety-checklist.outputs.registry }}/${svc}:${{ inputs.tag_prefix }}${{ github.sha }} --version
             echo "::endgroup::"
           done
 

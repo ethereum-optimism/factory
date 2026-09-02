@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ${{ github.ref_name }}
+      tag_prefix:
+        description: 'Prefix prepended to every published tag (both the commit-SHA tag and the sanitized tag). Must be tag-safe, e.g. "apko-".'
+        required: false
+        type: string
+        default: ''
       skip_arm64:
         description: 'Skip ARM64 builds (build amd64 only)'
         required: false
@@ -462,12 +467,12 @@ jobs:
 
           # Create manifest from digests
           docker buildx imagetools create \
-            -t ${IMAGE_NAME}:${{ github.sha }} \
-            -t ${IMAGE_NAME}:${{ needs.safety-checklist.outputs.sanitized_tag }} \
+            -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }} \
+            -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }} \
             $digest_refs
 
           # Get the multi-arch manifest digest
-          inspect_output=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ github.sha }})
+          inspect_output=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }})
           manifest_digest=$(echo "$inspect_output" | grep 'Digest:' | head -1 | awk '{print $2}')
           echo "digest=$manifest_digest" >> $GITHUB_OUTPUT
 
@@ -485,8 +490,8 @@ jobs:
           | **Platforms** | ${platforms} |
 
           ### Tags
-          - \`${{ github.sha }}\`
-          - \`${{ needs.safety-checklist.outputs.sanitized_tag }}\`
+          - \`${{ inputs.tag_prefix }}${{ github.sha }}\`
+          - \`${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }}\`
           EOF
 
   attest:
