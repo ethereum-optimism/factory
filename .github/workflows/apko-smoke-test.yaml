@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: ''
+      tag-prefix:
+        description: Prefix prepended to the SHA tag being pulled (must match apko-publish tag-prefix, e.g. apko-).
+        required: false
+        type: string
+        default: ''
 
 jobs:
   smoke:
@@ -67,7 +72,7 @@ jobs:
 
       - name: Smoke test
         env:
-          IMAGE: ${{ inputs.registry }}/${{ inputs.service }}:${{ github.sha }}
+          IMAGE: ${{ inputs.registry }}/${{ inputs.service }}:${{ inputs.tag-prefix }}${{ github.sha }}
           IMAGE_ARCH: ${{ inputs.arch }}
           SMOKE_TEST: ${{ inputs.smoke-test }}
           EXPECTED_VERSION: ${{ inputs.expected-version }}
