@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: ''
+      tag-prefix:
+        description: Prefix prepended to both the SHA tag and the publish tag (e.g. apko-). Empty for the default variant.
+        required: false
+        type: string
+        default: ''
       archs:
         description: Comma-separated apko publish architectures.
         required: false
@@ -142,15 +147,17 @@ jobs:
           IMAGE: ${{ inputs.registry }}/${{ inputs.service }}
           PUBLISH_TAG: ${{ inputs.publish-tag }}
           TAG_SUFFIX: ${{ inputs.tag-suffix }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
         run: |
           set -euo pipefail
           ref_tag="${PUBLISH_TAG:-$GITHUB_REF_NAME}"
           sanitized_ref="$(printf '%s' "$ref_tag" | sed 's/[^a-zA-Z0-9.]/-/g')"
           sanitized_suffix="$(printf '%s' "$TAG_SUFFIX" | sed 's/[^a-zA-Z0-9.-]/-/g')"
+          sanitized_prefix="$(printf '%s' "$TAG_PREFIX" | sed 's/[^a-zA-Z0-9.-]/-/g')"
           {
             echo "image=$IMAGE"
-            echo "sha=${GITHUB_SHA}${sanitized_suffix}"
-            echo "ref=${sanitized_ref}${sanitized_suffix}"
+            echo "sha=${sanitized_prefix}${GITHUB_SHA}${sanitized_suffix}"
+            echo "ref=${sanitized_prefix}${sanitized_ref}${sanitized_suffix}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and publish image
