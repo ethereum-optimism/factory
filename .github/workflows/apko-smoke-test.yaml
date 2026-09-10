@@ -78,6 +78,23 @@ jobs:
           EXPECTED_VERSION: ${{ inputs.expected-version }}
         run: |
           set -euo pipefail
+          # Fetch the image up front so a runner that cannot run it fails here.
+          # Inside the loop below docker's own errors (no daemon, image absent)
+          # are captured as command output and only a narrow set of exit codes
+          # is fatal, so they would otherwise pass as a test that never ran.
+          docker pull --platform "linux/$IMAGE_ARCH" "$IMAGE"
+
+          # `docker pull --platform` is happy to fetch a foreign arch, which
+          # then fails at `docker run` with an exit code the loop tolerates. No
+          # binfmt/qemu is registered on stock runners, so a smoke runner whose
+          # arch does not match the image can only produce a test that skips
+          # the image while reporting success.
+          pulled_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
+          if [ "$pulled_arch" != "$IMAGE_ARCH" ]; then
+            echo "FAIL: $IMAGE is $pulled_arch but this runner is $IMAGE_ARCH; the image cannot execute here" >&2
+            exit 1
+          fi
+
           version_matched=false
           normalized_version="${EXPECTED_VERSION#v}"
           IFS=',' read -ra tests <<< "$SMOKE_TEST"

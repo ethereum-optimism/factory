@@ -72,8 +72,10 @@ emit_outputs() {
   has_builds=$( [[ $(echo "$apko_matrix" | jq 'length') -gt 0 ]] && echo true || echo false )
   smoke_matrix=$(echo "$apko_matrix" | jq -c --slurpfile config "$CONFIG" '
     def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
+    # Both defaults must provide a docker daemon: the smoke test runs the
+    # published image, and a runner without one turns the test into a no-op.
     def smoke_runner($smoke_runners; $arch):
-      ($smoke_runners[$arch] // (if $arch == "arm64" then "ubuntu-24.04-arm" else "ubuntu-slim" end));
+      ($smoke_runners[$arch] // (if $arch == "arm64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end));
     ($config[0].smoke_runners // {}) as $smoke_runners
     | [.[] | select((.smoke_test // "") != "")
       | . as $image

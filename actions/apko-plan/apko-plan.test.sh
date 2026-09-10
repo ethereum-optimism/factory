@@ -116,4 +116,39 @@ assert_json "$variant_apko" '[.[] | select(.tag_suffix == "-dev")][0].smoke_test
 assert_json "$variant_melange" 'length' '1'
 assert_json "$variant_smoke" 'length' '1'
 
+# The default smoke runner must be able to run the built image. A runner
+# without a docker daemon does not fail the job: `docker run` writes its error
+# to the captured output and the loop only rejects a narrow set of exit codes,
+# so every smoke test silently passes without the image ever starting.
+default_runner_config="$TEST_DIR/default-runners.json"
+jq 'del(.smoke_runners) | .apko_archs = "amd64,arm64"' "$CONFIG" > "$default_runner_config"
+
+default_runner_output="$TEST_DIR/default-runners.out"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_REF_TYPE=branch \
+GITHUB_REF_NAME=main \
+GITHUB_OUTPUT="$default_runner_output" \
+  "$SCRIPT_DIR/apko-plan.sh" "$default_runner_config"
+
+default_runner_smoke=$(output_value "$default_runner_output" smoke_matrix_json)
+assert_json "$default_runner_smoke" '[.[] | select(.arch == "amd64")][0].runner' 'ubuntu-24.04'
+assert_json "$default_runner_smoke" '[.[] | select(.arch == "arm64")][0].runner' 'ubuntu-24.04-arm'
+
+# An explicit smoke_runners entry still wins over the default, and an arch the
+# override omits falls back to the default rather than to the overridden value.
+partial_override_config="$TEST_DIR/partial-override.json"
+jq '.smoke_runners = {"amd64": "ubuntu-latest"} | .apko_archs = "amd64,arm64"' \
+  "$CONFIG" > "$partial_override_config"
+
+partial_override_output="$TEST_DIR/partial-override.out"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_REF_TYPE=branch \
+GITHUB_REF_NAME=main \
+GITHUB_OUTPUT="$partial_override_output" \
+  "$SCRIPT_DIR/apko-plan.sh" "$partial_override_config"
+
+partial_override_smoke=$(output_value "$partial_override_output" smoke_matrix_json)
+assert_json "$partial_override_smoke" '[.[] | select(.arch == "amd64")][0].runner' 'ubuntu-latest'
+assert_json "$partial_override_smoke" '[.[] | select(.arch == "arm64")][0].runner' 'ubuntu-24.04-arm'
+
 echo "apko-plan tests passed"
