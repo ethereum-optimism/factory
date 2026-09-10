@@ -76,6 +76,14 @@ on:
         required: false
         type: string
         default: ''
+      build-env:
+        description: |
+          Extra KEY=VALUE lines appended to the melange build environment, one
+          per line. For build metadata the factory cannot derive itself, such
+          as a version resolved from a repository the build does not check out.
+        required: false
+        type: string
+        default: ''
     secrets:
       SOURCE_CHECKOUT_APP_ID:
         required: false
@@ -95,6 +103,7 @@ jobs:
       MELANGE_CONFIG: ${{ inputs.melange-config != '' && inputs.melange-config || format('melange/{0}.yaml', inputs.stack) }}
       MELANGE_CARGO_PROFILE: ${{ inputs.cargo-profile }}
       MELANGE_BUILD_VERSION: ${{ inputs.build-version }}
+      MELANGE_BUILD_ENV: ${{ inputs.build-env }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -250,6 +259,27 @@ jobs:
             printf 'GIT_DATE=%s\n' "${{ steps.source-metadata.outputs.date }}"
             printf 'BUILD_PROFILE=%s\n' "$MELANGE_CARGO_PROFILE"
           } > "$metadata_env"
+          # Appended after the keys above, and an env file is last-wins, so a
+          # caller could otherwise silently replace the release version or the
+          # profile this job just derived.
+          reserved="MELANGE_CARGO_PROFILE GIT_VERSION GIT_COMMIT GIT_DATE BUILD_PROFILE"
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -n "$line" ] || continue
+            if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+              echo "build-env line is not KEY=VALUE: $line" >&2
+              exit 1
+            fi
+            case " $reserved " in
+              *" ${line%%=*} "*)
+                echo "build-env may not set ${line%%=*}: it is derived by this job" >&2
+                exit 1
+                ;;
+            esac
+            printf '%s\n' "$line" >> "$metadata_env"
+          done <<< "$MELANGE_BUILD_ENV"
+          echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
           sudo env "PATH=$PATH" \
             melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
