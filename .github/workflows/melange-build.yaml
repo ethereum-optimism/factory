@@ -268,7 +268,7 @@ jobs:
             line="${line%"${line##*[![:space:]]}"}"
             [ -n "$line" ] || continue
             if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-              echo "build-env line is not KEY=VALUE: $line" >&2
+              echo "build-env line is not KEY=VALUE" >&2
               exit 1
             fi
             case " $reserved " in
