@@ -306,6 +306,7 @@ jobs:
           key: ${{ steps.cache-key.outputs.key }}
 
       - name: Attest APK provenance
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: "${{ github.workspace }}/apk-packages/**/*.apk"
