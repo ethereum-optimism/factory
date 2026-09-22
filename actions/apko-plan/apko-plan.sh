@@ -15,6 +15,17 @@ set -euo pipefail
 
 CONFIG="${1:?catalog path required}"
 
+# Reject old runner-label configuration before any event-specific early exit.
+# The reusable workflow independently validates these profiles before scheduling.
+jq -e '
+  if has("default_runners") or any(.melange[]?; has("runners")) then
+    error("Remove default_runners and melange.<stack>.runners; use melange.<stack>.runner_profile (standard or large)")
+  elif any(.melange[]?; has("runner_profile") and
+    (.runner_profile != "standard" and .runner_profile != "large")) then
+    error("melange.<stack>.runner_profile must be standard or large")
+  else true end
+' "$CONFIG" > /dev/null
+
 EVENT_NAME="${GITHUB_EVENT_NAME:-workflow_dispatch}"
 REF_TYPE="${GITHUB_REF_TYPE:-}"
 REF_NAME="${GITHUB_REF_NAME:-}"
@@ -174,15 +185,6 @@ build_apko_matrix() {
     ' "$CONFIG"
 }
 
-runner_for() {
-  local keyword="$1" arch="$2"
-  jq -r --arg kw "$keyword" --arg arch "$arch" '
-    .melange[$kw].runners[$arch]
-    // .default_runners[$arch]
-    // (if $arch == "aarch64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)
-  ' "$CONFIG"
-}
-
 build_melange_matrix() {
   local -n _keywords="$1"
   local source_ref_override="${2:-}"
@@ -197,16 +199,12 @@ build_melange_matrix() {
     --arg source_ref_override "$source_ref_override" \
     --arg build_version "$build_version" \
     '
-      def runner($kw; $arch):
-        (.melange[$kw].runners[$arch]
-          // .default_runners[$arch]
-          // (if $arch == "aarch64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end));
       [.melange as $melange | $keywords[] as $kw | $melange_archs[] as $arch
         | $melange[$kw] as $cfg
         | {
             stack: $kw,
             arch: $arch,
-            runner: runner($kw; $arch),
+            runner_profile: ($cfg.runner_profile // "standard"),
             build_version: $build_version,
             melange_config: ($cfg.config // ("melange/" + $kw + ".yaml")),
             checkout_source: (($cfg.source // null) != null),
