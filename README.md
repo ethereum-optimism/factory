@@ -5,6 +5,8 @@ and validate them with service-owned integration tests.
 
 ## What's here
 
+- `actions/apko-plan` and `.github/workflows/melange-build.yaml` plan and build
+  Melange packages. See [runner profiles and caller migration](actions/apko-plan/README.md).
 - `actions/plan` — reads a consumer repo's `.github/images.json`, decides which
   images to build, and emits a matrix consumable by the build and
   integration-test workflows.

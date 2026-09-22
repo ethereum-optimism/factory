@@ -5,12 +5,14 @@ on:
     paths:
       - actions/apko-plan/**
       - .github/workflows/apko-plan-test.yaml
+      - .github/workflows/melange-build.yaml
   push:
     branches:
       - main
     paths:
       - actions/apko-plan/**
       - .github/workflows/apko-plan-test.yaml
+      - .github/workflows/melange-build.yaml
 
 permissions:
   contents: read
@@ -24,3 +26,5 @@ jobs:
           persist-credentials: false
       - name: Test apko planner
         run: actions/apko-plan/apko-plan.test.sh
+      - name: Test Melange runner selection
+        run: python3 -m unittest discover -s actions/apko-plan -p 'test_*.py' -v

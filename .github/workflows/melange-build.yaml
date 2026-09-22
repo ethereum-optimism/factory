@@ -12,10 +12,11 @@ on:
         description: Melange target architecture (x86_64 or aarch64).
         required: true
         type: string
-      runner:
-        description: GitHub Actions runner label for this leg.
-        required: true
+      runner-profile:
+        description: Compute profile for this leg (standard or large).
+        required: false
         type: string
+        default: standard
       melange-config:
         description: Melange YAML path relative to repo root. Defaults to melange/<stack>.yaml.
         required: false
@@ -91,9 +92,37 @@ on:
         required: false
 
 jobs:
+  select-runner:
+    name: select runner
+    runs-on: ubuntu-slim
+    permissions: {}
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+    steps:
+      - name: Validate runner profile and architecture
+        id: select
+        shell: bash
+        env:
+          RUNNER_PROFILE: ${{ inputs.runner-profile }}
+          BUILD_ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_PROFILE:$BUILD_ARCH" in
+            standard:x86_64)  runner=ubuntu-24.04 ;;
+            standard:aarch64) runner=ubuntu-24.04-arm ;;
+            large:x86_64)     runner=oplabs-ubuntu-x86 ;;
+            large:aarch64)    runner=oplabs-ubuntu-arm ;;
+            *)
+              echo "::error::Unsupported runner profile or architecture"
+              exit 1
+              ;;
+          esac
+          printf 'runner=%s\n' "$runner" >> "$GITHUB_OUTPUT"
+
   build:
     name: build
-    runs-on: ${{ inputs.runner }}
+    needs: select-runner
+    runs-on: ${{ needs.select-runner.outputs.runner }}
     permissions:
       contents: read
       id-token: write

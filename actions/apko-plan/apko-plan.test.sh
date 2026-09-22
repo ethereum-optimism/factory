@@ -17,7 +17,6 @@ cat > "$CONFIG" <<'JSON'
     "publish_tag": "${version}",
     "source_ref": "${ref_name}"
   },
-  "default_runners": {"x86_64": "ubuntu-latest"},
   "smoke_runners": {"amd64": "ubuntu-latest"},
   "melange": {"stack": {"config": "melange/stack.yaml"}},
   "images": {
@@ -76,6 +75,8 @@ GITHUB_OUTPUT="$branch_output" \
 branch_melange=$(output_value "$branch_output" melange_matrix_json)
 branch_smoke=$(output_value "$branch_output" smoke_matrix_json)
 assert_json "$branch_melange" '.[0].build_version' ''
+assert_json "$branch_melange" '.[0].runner_profile' 'standard'
+assert_json "$branch_melange" '.[0] | has("runner")' 'false'
 assert_json "$branch_smoke" '.[0].expected_version' ''
 
 invalid_output="$TEST_DIR/invalid.out"
@@ -150,5 +151,47 @@ GITHUB_OUTPUT="$partial_override_output" \
 partial_override_smoke=$(output_value "$partial_override_output" smoke_matrix_json)
 assert_json "$partial_override_smoke" '[.[] | select(.arch == "amd64")][0].runner' 'ubuntu-latest'
 assert_json "$partial_override_smoke" '[.[] | select(.arch == "arm64")][0].runner' 'ubuntu-24.04-arm'
+
+# Profile selection must preserve both build architectures and smoke output.
+profile_config="$TEST_DIR/profiles.json"
+jq '.melange_archs = ["x86_64", "aarch64"] | .melange.stack.runner_profile = "large"' \
+  "$CONFIG" > "$profile_config"
+profile_output="$TEST_DIR/profiles.out"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_REF_TYPE=branch \
+GITHUB_REF_NAME=main \
+GITHUB_OUTPUT="$profile_output" \
+  "$SCRIPT_DIR/apko-plan.sh" "$profile_config"
+profile_melange=$(output_value "$profile_output" melange_matrix_json)
+assert_json "$profile_melange" '[.[].arch] | sort | join(",")' 'aarch64,x86_64'
+assert_json "$profile_melange" 'all(.[]; .runner_profile == "large" and (has("runner") | not))' 'true'
+assert_json "$(output_value "$profile_output" smoke_matrix_json)" '.' "$(jq . <<< "$branch_smoke")"
+
+# Do not silently fall back when legacy labels or invalid profiles are supplied.
+# Use a non-release tag to also exercise validation before planner early exits.
+for change in \
+  '.default_runners = {"x86_64": "audit-test-runner"}' \
+  '.melange.stack.runners = {"x86_64": "audit-test-runner"}' \
+  '.melange.stack.runner_profile = "audit-test-runner"' \
+  '.melange.stack.runner_profile = ""' \
+  '.melange.stack.runner_profile = "large "' \
+  '.melange.stack.runner_profile = null' \
+  '.melange.stack.runner_profile = false' \
+  '.melange.stack.runner_profile = ["large"]'; do
+  jq "$change" "$CONFIG" > "$TEST_DIR/rejected.json"
+  : > "$TEST_DIR/rejected.out"
+  if GITHUB_EVENT_NAME=push \
+    GITHUB_REF_TYPE=tag \
+    GITHUB_REF_NAME=not-a-release \
+    GITHUB_OUTPUT="$TEST_DIR/rejected.out" \
+      "$SCRIPT_DIR/apko-plan.sh" "$TEST_DIR/rejected.json" > "$TEST_DIR/rejected.log" 2>&1; then
+    echo "planner accepted invalid runner configuration: $change" >&2
+    exit 1
+  fi
+  if [[ -s "$TEST_DIR/rejected.out" ]]; then
+    echo "planner emitted outputs for invalid runner configuration: $change" >&2
+    exit 1
+  fi
+done
 
 echo "apko-plan tests passed"
