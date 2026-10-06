@@ -18,7 +18,7 @@ repository, so supply customer-facing content.
 | `image` | Yes | Fully qualified image reference ending in `@sha256:<64 hex characters>`. Tags are rejected to avoid attaching notes to a concurrently updated release. |
 | `file` | Yes | Nonempty Markdown file on the runner. Relative paths are relative to the current working directory. |
 
-The action installs a pinned ORAS version and uses existing Docker/ORAS registry
+The action installs a pinned ORAS version through mise and uses existing Docker/ORAS registry
 credentials. Run on Linux with Bash and Python 3 (available on GitHub's Ubuntu
 runners). Missing files, invalid references, and failed uploads fail the step.
 The `reference` output is the attachment's full digest reference, ready for
