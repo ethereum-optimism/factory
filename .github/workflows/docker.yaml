@@ -143,6 +143,14 @@ on:
         description: 'Token for accessing source_repo when it is a private repository'
         required: false
 
+    outputs:
+      image:
+        description: Fully qualified final image reference with its manifest digest.
+        value: ${{ jobs.merge.outputs.image }}
+      digest:
+        description: Final multi-architecture manifest digest.
+        value: ${{ jobs.merge.outputs.digest }}
+
 jobs:
   safety-checklist:
     runs-on: ubuntu-latest
@@ -421,6 +429,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       digest: ${{ steps.merge.outputs.digest }}
+      image: ${{ needs.safety-checklist.outputs.registry }}/${{ inputs.image_name }}@${{ steps.merge.outputs.digest }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0

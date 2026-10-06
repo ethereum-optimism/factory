@@ -83,6 +83,13 @@ on:
       source_token:
         description: 'Token for accessing source_repo when it is a private repository'
         required: false
+    outputs:
+      digests:
+        description: JSON object mapping each service name to its final image manifest digest.
+        value: ${{ jobs.apko.outputs.digests }}
+      services_json:
+        description: JSON array of published service names.
+        value: ${{ jobs.apko.outputs.services_json }}
 
 jobs:
   safety-checklist:

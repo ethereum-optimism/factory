@@ -24,6 +24,9 @@ and validate them with service-owned integration tests.
 - `actions/agent-approval-check` — dependency-free approval gate for
   agent-authored pull requests. Requires distinct write-capable human approvals
   and publishes the `agent-approval-check` commit status.
+- `actions/release-notes` — publishes customer-facing Markdown as an OCI 1.1
+  attachment to an image digest. Customers can retrieve the notes using their
+  Artifact Registry access. See [publishing and downloading release notes](actions/release-notes/README.md).
 
 ## `images.json`
 

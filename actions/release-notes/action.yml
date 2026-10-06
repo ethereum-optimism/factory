@@ -1,0 +1,30 @@
+name: Publish image release notes
+description: Attach a Markdown release-notes file to an image digest using OCI 1.1 referrers. Requires existing registry authentication.
+
+inputs:
+  image:
+    description: Fully qualified image reference with the final manifest digest (registry/name@sha256:...).
+    required: true
+  file:
+    description: Path to the customer-facing Markdown release notes.
+    required: true
+
+outputs:
+  reference:
+    description: Fully qualified attachment reference, suitable for oras pull.
+    value: ${{ steps.publish.outputs.reference }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up ORAS
+      uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+      with:
+        version: 1.3.4
+    - name: Publish release notes
+      id: publish
+      shell: bash
+      env:
+        RELEASE_NOTES_IMAGE: ${{ inputs.image }}
+        RELEASE_NOTES_FILE: ${{ inputs.file }}
+      run: bash "$GITHUB_ACTION_PATH/publish.sh"
