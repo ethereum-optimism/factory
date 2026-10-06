@@ -11,7 +11,78 @@ and download attachments; they do not need access to the source GitHub repo.
 The publisher needs registry write access. Notes are visible to readers of the
 repository, so supply customer-facing content.
 
-## Contract
+## Automatic publishing from GitHub Releases (recommended)
+
+Use `.github/workflows/release-notes.yaml` to keep release-note publishing in
+Factory. Each consuming repository only needs this caller:
+
+```yaml
+name: Publish release notes
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release-notes:
+    uses: ethereum-optimism/factory/.github/workflows/release-notes.yaml@<pinned-sha>
+    with:
+      image: us-docker.pkg.dev/oplabs-tools-artifacts/internal-images/op-monitorism
+```
+
+The reusable workflow reads the **calling repository's GitHub Release body**,
+including notes generated through GitHub's release UI. It does not generate its
+own changelog. No Markdown file, authentication steps, or scripts are needed in
+the consuming repository.
+
+It maps `op-monitorism/v0.0.13` or `v0.0.13` to image tag `v0.0.13`, waits up to
+15 minutes for that image to become available, then resolves its immutable digest
+and attaches the notes. It creates no container image and changes no image tags,
+image bytes, or existing image signatures. The image's signature does not cover
+the separate release-notes attachment.
+
+Authentication defaults to the existing `oplabs-tools-artifacts` GitHub workload
+identity provider. The calling repository must already be trusted by that
+provider and have Artifact Registry write access. Other GCP setups can override
+the authentication inputs below; this workflow does not grant access.
+
+| Workflow input | Default / purpose |
+|---|---|
+| `image` | Required Artifact Registry image path, **without** tag or digest. |
+| `release_tag` | The caller's release event tag. Set explicitly for manual backfills. |
+| `image_tag` | Release tag with the matching image-name prefix removed. Override for tags such as `apko-v0.0.13`. |
+| `gcp_project_id` | `oplabs-tools-artifacts`. |
+| `workload_identity_provider` | `projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc`. |
+| `service_account` | Empty for direct workload identity federation; optionally impersonate a service account. |
+| `wait_seconds` | `900`; accepts 0–1800. Zero performs one image lookup without retries. |
+
+The workflow returns `image` (the immutable image reference) and `reference`
+(the attachment reference). It verifies referrer discovery and downloads the
+attachment to compare the exact Markdown bytes. Both references and the image's
+Artifact Registry link are included in the run summary. Missing or
+empty release notes, drafts, mismatched image-name prefixes, and invalid image
+tags fail before authentication. Only missing images are retried; authentication
+and other registry errors fail immediately.
+
+For a manual backfill, add a `workflow_dispatch` trigger to the caller with a
+required string input named `release_tag`, then pass
+`release_tag: ${{ inputs.release_tag || github.event.release.tag_name }}` in the
+job's `with` block. The referenced GitHub Release and image must already exist
+or become available within the wait period. To publish edited notes, include
+`edited` in the caller's release event types or run a backfill. Repeated publishing
+can create additional attachments, as described below.
+
+For repositories with releases for multiple images, filter each caller job to
+its own release tags, for example
+`if: startsWith(github.event.release.tag_name, 'op-monitorism/')` for the
+release-event caller above. The workflow rejects a different image-name prefix
+unless `image_tag` is explicitly supplied.
+
+## Composite action contract
 
 | Input | Required | Meaning |
 |---|---|---|
@@ -125,7 +196,10 @@ image is deleted; retain release images through your cleanup policy.
 ## Validation and references
 
 Run `python3 -m unittest discover -s actions/release-notes -p 'test_*.py' -v`
-with ORAS installed. Tests use real ORAS and an offline OCI layout to verify
+with ORAS and PyYAML 6.0.3 installed. Workflow tests execute its actual preparation
+and resolution scripts with mocked GitHub and registry responses to verify tag
+mapping, exact release-body bytes, error handling, and image-build retries.
+Attachment tests use real ORAS and an offline OCI layout to verify
 attachment discovery, digest identity, downloaded file contents, invalid inputs,
 and failed uploads. They do not exercise live Artifact Registry IAM or its UI.
 

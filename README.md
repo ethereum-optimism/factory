@@ -27,6 +27,10 @@ and validate them with service-owned integration tests.
 - `actions/release-notes` — publishes customer-facing Markdown as an OCI 1.1
   attachment to an image digest. Customers can retrieve the notes using their
   Artifact Registry access. See [publishing and downloading release notes](actions/release-notes/README.md).
+- `.github/workflows/release-notes.yaml` — automatically attaches the calling
+  repository's GitHub Release notes to its published image. The standard OP Labs
+  setup needs only the image path; authentication, tag mapping, and waiting for
+  the image build are handled centrally. See the [minimal caller](actions/release-notes/README.md#automatic-publishing-from-github-releases-recommended).
 
 ## `images.json`
 
