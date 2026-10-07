@@ -52,6 +52,13 @@ on:
         required: false
         type: string
         default: x86_64,aarch64
+    outputs:
+      image:
+        description: Fully qualified final image reference with its manifest digest.
+        value: ${{ jobs.publish.outputs.image }}
+      digest:
+        description: Final image manifest digest.
+        value: ${{ jobs.publish.outputs.digest }}
 jobs:
   publish:
     name: publish
@@ -64,6 +71,9 @@ jobs:
       actions: read
     env:
       APKO_CONFIG: ${{ inputs.apko-config != '' && inputs.apko-config || format('apko/{0}.yaml', inputs.service) }}
+    outputs:
+      image: ${{ inputs.registry }}/${{ inputs.service }}@${{ steps.digest.outputs.sha }}
+      digest: ${{ steps.digest.outputs.sha }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4

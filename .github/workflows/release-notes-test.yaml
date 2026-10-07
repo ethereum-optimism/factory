@@ -1,0 +1,34 @@
+name: release notes tests
+
+on:
+  pull_request:
+    paths:
+      - actions/release-notes/**
+      - .github/workflows/release-notes-test.yaml
+      - .github/workflows/release-notes.yaml
+  push:
+    branches: [main]
+    paths:
+      - actions/release-notes/**
+      - .github/workflows/release-notes-test.yaml
+      - .github/workflows/release-notes.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c1ecc8f748cd28cdeabf76dab3cccde4ce692fe4
+        with:
+          install: false
+          cache: false
+      - name: Verify release notes round trip and validation
+        # PyYAML lets the tests execute the actual reusable workflow steps.
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          mise exec aqua:oras-project/oras@1.3.4 -- python3 -m unittest discover -s actions/release-notes -p 'test_*.py' -v
