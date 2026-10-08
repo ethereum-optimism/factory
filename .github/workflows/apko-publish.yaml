@@ -72,7 +72,7 @@ jobs:
     env:
       APKO_CONFIG: ${{ inputs.apko-config != '' && inputs.apko-config || format('apko/{0}.yaml', inputs.service) }}
     outputs:
-      image: ${{ inputs.registry }}/${{ inputs.service }}@${{ steps.digest.outputs.sha }}
+      image: ${{ steps.fork_ctx.outputs.registry }}/${{ inputs.service }}@${{ steps.digest.outputs.sha }}
       digest: ${{ steps.digest.outputs.sha }}
     steps:
       - name: Harden Runner
@@ -84,6 +84,32 @@ jobs:
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
           persist-credentials: false
+
+      # Keep this in lockstep with the safety-checklist job in docker.yaml.
+      - name: Compute fork context
+        id: fork_ctx
+        env:
+          CANONICAL: ${{ inputs.registry }}
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          is_fork="false"
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+            is_fork="true"
+          fi
+          if [[ "$is_fork" == "true" ]]; then
+            registry="ttl.sh/${SHA}"
+            should_authenticate="false"
+          else
+            registry="$CANONICAL"
+            should_authenticate="true"
+          fi
+          echo "is_fork=$is_fork" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "should_authenticate=$should_authenticate" >> "$GITHUB_OUTPUT"
 
       - name: Download melange APK repositories
         if: inputs.needs-melange-apks != ''
@@ -108,7 +134,7 @@ jobs:
           echo "paths=$repos" >> "$GITHUB_OUTPUT"
 
       - name: Verify melange APK attestations
-        if: inputs.needs-melange-apks != ''
+        if: inputs.needs-melange-apks != '' && steps.fork_ctx.outputs.is_fork != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -130,6 +156,7 @@ jobs:
           done
 
       - name: Authenticate to Google Cloud (image push)
+        if: steps.fork_ctx.outputs.should_authenticate == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           project_id: oplabs-tools-artifacts
@@ -137,6 +164,7 @@ jobs:
           create_credentials_file: true
 
       - name: Get Artifact Registry token
+        if: steps.fork_ctx.outputs.should_authenticate == 'true'
         id: ar_token
         run: |
           set -euo pipefail
@@ -145,6 +173,7 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Login to Artifact Registry
+        if: steps.fork_ctx.outputs.should_authenticate == 'true'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: us-docker.pkg.dev
@@ -154,7 +183,7 @@ jobs:
       - name: Compute image tags
         id: image-tags
         env:
-          IMAGE: ${{ inputs.registry }}/${{ inputs.service }}
+          IMAGE: ${{ steps.fork_ctx.outputs.registry }}/${{ inputs.service }}
           PUBLISH_TAG: ${{ inputs.publish-tag }}
           TAG_SUFFIX: ${{ inputs.tag-suffix }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
@@ -178,8 +207,8 @@ jobs:
           APKO_EXTRA_TAGS: ${{ steps.image-tags.outputs.image }}:${{ steps.image-tags.outputs.ref }}
           APKO_REPOSITORY_APPEND: ${{ steps.apk-repos.outputs.paths }}
           APKO_ARCHS: ${{ inputs.archs }}
-          APKO_GENERIC_USER: oauth2accesstoken
-          APKO_GENERIC_PASS: ${{ steps.ar_token.outputs.token }}
+          APKO_GENERIC_USER: ${{ steps.fork_ctx.outputs.should_authenticate == 'true' && 'oauth2accesstoken' || '' }}
+          APKO_GENERIC_PASS: ${{ steps.fork_ctx.outputs.should_authenticate == 'true' && steps.ar_token.outputs.token || '' }}
           DIGEST_FILE: /tmp/apko-${{ github.run_id }}-${{ inputs.service }}.digest
         run: |
           set -euo pipefail
@@ -238,10 +267,10 @@ jobs:
           echo "sha=${DIGEST##*@}" >> "$GITHUB_OUTPUT"
 
       - name: Attest image build provenance
-        if: steps.digest.outputs.sha != ''
+        if: steps.digest.outputs.sha != '' && steps.fork_ctx.outputs.should_authenticate == 'true'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ inputs.registry }}/${{ inputs.service }}
+          subject-name: ${{ steps.fork_ctx.outputs.registry }}/${{ inputs.service }}
           subject-digest: ${{ steps.digest.outputs.sha }}
           push-to-registry: true
           show-summary: false
