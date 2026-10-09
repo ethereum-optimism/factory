@@ -220,9 +220,17 @@ jobs:
           steps.cache-policy.outputs.restore == 'true' ||
           steps.cache-policy.outputs.save == 'true'
         id: cache-key
+        env:
+          CARGO_PROFILE: ${{ inputs.cargo-profile }}
         run: |
           set -euo pipefail
-          key="melange-v2-${{ inputs.stack }}-${{ inputs.arch }}"
+          # Builds under different cargo profiles share no target/ artifacts, so
+          # a cache saved by one profile is dead weight for another. The '.'
+          # terminator cannot appear in a cargo profile name, so the restore
+          # prefix for one profile never matches another it is a prefix of
+          # (release vs release-perf).
+          prefix="melange-v2-${{ inputs.stack }}-${{ inputs.arch }}-${CARGO_PROFILE:-none}."
+          key="$prefix"
           files="${{ inputs.cache-key-files }}"
           if [ -n "$files" ]; then
             IFS=',' read -ra paths <<< "$files"
@@ -238,9 +246,10 @@ jobs:
               hash_inputs+=("$path")
             done
             if [ "${#hash_inputs[@]}" -gt 0 ]; then
-              key="${key}-$(sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
+              key="${key}$(sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
             fi
           fi
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Restore melange cache
@@ -251,7 +260,7 @@ jobs:
           path: melange-cache
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            melange-v2-${{ inputs.stack }}-${{ inputs.arch }}-
+            ${{ steps.cache-key.outputs.prefix }}
 
       - name: Report restored cache
         if: steps.cache-policy.outputs.restore == 'true'
