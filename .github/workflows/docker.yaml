@@ -475,10 +475,20 @@ jobs:
           done
 
           # Create manifest from digests
-          docker buildx imagetools create \
-            -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }} \
-            -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }} \
-            $digest_refs
+          for attempt in 1 2 3; do
+            if docker buildx imagetools create \
+              -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }} \
+              -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }} \
+              $digest_refs; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::imagetools create failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "::warning::imagetools create attempt ${attempt} failed, retrying in 30s"
+            sleep 30
+          done
 
           # Get the multi-arch manifest digest
           inspect_output=$(docker buildx imagetools inspect ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }})
