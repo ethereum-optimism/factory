@@ -476,7 +476,7 @@ jobs:
 
           # Create manifest from digests
           for attempt in 1 2 3; do
-            if docker buildx imagetools create \
+            if timeout 180 docker buildx imagetools create \
               -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ github.sha }} \
               -t ${IMAGE_NAME}:${{ inputs.tag_prefix }}${{ needs.safety-checklist.outputs.sanitized_tag }} \
               $digest_refs; then
