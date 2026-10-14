@@ -80,6 +80,14 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -a -f >/dev/null
+          df -h /
+
       - name: Checkout repository
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
