@@ -180,7 +180,7 @@ jobs:
 
       - name: Create kind cluster
         if: steps.layout.outputs.needs_kind == 'true'
-        uses: chainguard-dev/actions/setup-kind@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+        uses: chainguard-dev/actions/setup-kind@061bc0e921116bde1470f51fb5c86d5318f16558 # v1.6.15
         with:
           k8s-version: ${{ inputs.k8s_version }}
           kind-version: ${{ inputs.kind_version }}

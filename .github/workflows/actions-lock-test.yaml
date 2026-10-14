@@ -1,0 +1,13 @@
+name: Actions lock
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actions-lock:
+    uses: ./.github/workflows/actions-lock.yaml
