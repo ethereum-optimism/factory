@@ -163,6 +163,22 @@ jobs:
             exit 1
           done
 
+      - name: Authenticate to Chainguard
+        if: vars.CHAINGUARD_APK_IDENTITY != '' && steps.fork_ctx.outputs.is_fork != 'true'
+        uses: chainguard-dev/setup-chainctl@2cddd35a2f120d9973e58094dc6878c93cf58c28 # v0.5.1
+        with:
+          identity: ${{ vars.CHAINGUARD_APK_IDENTITY }}
+
+      - name: Get Chainguard APK token
+        if: vars.CHAINGUARD_APK_IDENTITY != '' && steps.fork_ctx.outputs.is_fork != 'true'
+        id: cg_token
+        run: |
+          set -euo pipefail
+          token="$(chainctl auth token --audience apk.cgr.dev)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "http_auth=basic:apk.cgr.dev:user:$token" >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud (image push)
         if: steps.fork_ctx.outputs.should_authenticate == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -218,6 +234,7 @@ jobs:
           APKO_GENERIC_USER: ${{ steps.fork_ctx.outputs.should_authenticate == 'true' && 'oauth2accesstoken' || '' }}
           APKO_GENERIC_PASS: ${{ steps.fork_ctx.outputs.should_authenticate == 'true' && steps.ar_token.outputs.token || '' }}
           DIGEST_FILE: /tmp/apko-${{ github.run_id }}-${{ inputs.service }}.digest
+          HTTP_AUTH: ${{ steps.cg_token.outputs.http_auth }}
         run: |
           set -euo pipefail
           docker run -i --rm --entrypoint /bin/bash \
@@ -233,6 +250,7 @@ jobs:
             -e APKO_GENERIC_USER \
             -e APKO_GENERIC_PASS \
             -e DIGEST_FILE \
+            -e HTTP_AUTH \
             ghcr.io/wolfi-dev/sdk:latest <<'APKO_EOF'
           set -euo pipefail
 
