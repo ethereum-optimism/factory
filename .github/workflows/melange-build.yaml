@@ -287,7 +287,25 @@ jobs:
           echo "commit=$(git -C "$source_dir" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(git -C "$source_dir" show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Authenticate to Chainguard
+        if: vars.CHAINGUARD_APK_IDENTITY != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: chainguard-dev/setup-chainctl@2cddd35a2f120d9973e58094dc6878c93cf58c28 # v0.5.1
+        with:
+          identity: ${{ vars.CHAINGUARD_APK_IDENTITY }}
+
+      - name: Get Chainguard APK token
+        if: vars.CHAINGUARD_APK_IDENTITY != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        id: cg_token
+        run: |
+          set -euo pipefail
+          token="$(chainctl auth token --audience apk.cgr.dev)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "http_auth=basic:apk.cgr.dev:user:$token" >> "$GITHUB_OUTPUT"
+
       - name: Build packages
+        env:
+          HTTP_AUTH: ${{ steps.cg_token.outputs.http_auth }}
         run: |
           metadata_env="${RUNNER_TEMP}/melange-build.env"
           {
@@ -318,7 +336,7 @@ jobs:
             printf '%s\n' "$line" >> "$metadata_env"
           done <<< "$MELANGE_BUILD_ENV"
           echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
-          sudo env "PATH=$PATH" \
+          sudo env "PATH=$PATH" "HTTP_AUTH=$HTTP_AUTH" \
             melange build "${{ env.MELANGE_CONFIG }}" \
             --arch "${{ inputs.arch }}" \
             --out-dir "${{ github.workspace }}/apk-packages" \
