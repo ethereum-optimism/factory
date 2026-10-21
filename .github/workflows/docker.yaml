@@ -289,6 +289,35 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.auth_token }}
 
+      - name: Get Chainguard APK token
+        if: vars.CHAINGUARD_APK_IDENTITY != '' && needs.safety-checklist.outputs.should_authenticate == 'true'
+        id: cg_token
+        env:
+          CHAINGUARD_IDENTITY: ${{ vars.CHAINGUARD_APK_IDENTITY }}
+          CHAINCTL_VERSION: 0.2.262
+          RUNNER_ARCH_NAME: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH_NAME" in
+            X64) arch=x86_64 sha=59bfa58ea64bc8943a7d633a7be0eb4a59e5eaa7a0dca6360907e219485b451b ;;
+            ARM64) arch=arm64 sha=2044c1d87058809a402374796ede4933147709d11d5280d8233637df23c86a3a ;;
+            *) echo "unsupported runner arch: $RUNNER_ARCH_NAME" >&2; exit 1 ;;
+          esac
+          bin="${RUNNER_TEMP}/chainctl"
+          curl -fsSL --retry 5 --retry-all-errors -o "$bin" \
+            "https://dl.enforce.dev/chainctl/${CHAINCTL_VERSION}/chainctl_linux_${arch}"
+          echo "${sha}  ${bin}" | sha256sum -c -
+          chmod +x "$bin"
+          "$bin" auth login --identity "$CHAINGUARD_IDENTITY"
+          "$bin" auth login --identity "$CHAINGUARD_IDENTITY" --audience apk.cgr.dev
+          token="$("$bin" auth token --audience apk.cgr.dev)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          {
+            echo "token=$token"
+            echo "http_auth=basic:apk.cgr.dev:user:$token"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set environment variables
         if: inputs.env != ''
         run: |
@@ -310,6 +339,7 @@ jobs:
           provenance: mode=max
           sbom: ${{ inputs.sbom }}
           build-args: ${{ inputs.build_args }}
+          secrets: ${{ steps.cg_token.outputs.token != '' && format('chainguard_apk_token={0}', steps.cg_token.outputs.token) || '' }}
           cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
           cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
           outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ needs.safety-checklist.outputs.registry }}/${{ inputs.image_name }},push=true
@@ -320,6 +350,7 @@ jobs:
         id: bake
         env:
           PLATFORMS: ${{ matrix.platform }}
+          CHAINGUARD_APK_TOKEN: ${{ steps.cg_token.outputs.token }}
         uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7
         with:
           source: .
@@ -333,6 +364,7 @@ jobs:
             *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
             *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope=${{ inputs.image_name }}-${{ matrix.platform }}') || '' }}
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ needs.safety-checklist.outputs.registry }}/${{ inputs.image_name }},push=true
+            ${{ steps.cg_token.outputs.token != '' && '*.secrets=id=chainguard_apk_token,env=CHAINGUARD_APK_TOKEN' || '' }}
             ${{ inputs.set }}
 
       # === Ko mode ===
@@ -369,6 +401,8 @@ jobs:
       - name: Build and publish image (apko mode)
         if: inputs.mode == 'apko'
         id: apko
+        env:
+          HTTP_AUTH: ${{ steps.cg_token.outputs.http_auth }}
         uses: chainguard-images/actions/apko-publish@8c944db3b6ddf03e393f894724815fc3ac3572f2 # v1.0.24
         with:
           config: ${{ inputs.apko_config }}
