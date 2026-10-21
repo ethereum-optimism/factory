@@ -200,7 +200,9 @@ config baseline, so each consumer repo carries only a thin caller and a thin
   the calling repo. Credentials and execution stay in our infra.
 - `renovate-config.json` — the org baseline preset. Disables all generic
   version updates and raises PRs only for GitHub + OSV vulnerability advisories
-  (CVE-only). Consume it from a repo's `renovate.json` via `extends`.
+  (CVE-only). npm major updates are blocked, including vulnerability fixes, so
+  a CVE whose only fix is a new major needs a manual upgrade. Consume it from a
+  repo's `renovate.json` via `extends`.
 
 The `schedule` / `workflow_dispatch` triggers live in each consumer's caller
 (a reusable workflow cannot own a `schedule`). The Renovate GitHub App
