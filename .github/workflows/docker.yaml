@@ -341,7 +341,7 @@ jobs:
           build-args: ${{ inputs.build_args }}
           secrets: ${{ steps.cg_token.outputs.token != '' && format('chainguard_apk_token={0}', steps.cg_token.outputs.token) || '' }}
           cache-from: type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
-          cache-to: ${{ github.ref_protected && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
+          cache-to: ${{ needs.safety-checklist.outputs.is_fork_pr == 'false' && format('type=gha,mode=max,scope={0}-{1}', inputs.image_name, matrix.platform) || '' }}
           outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ needs.safety-checklist.outputs.registry }}/${{ inputs.image_name }},push=true
 
       # === Bake mode ===
@@ -362,7 +362,7 @@ jobs:
           set: |
             *.tags=
             *.cache-from=type=gha,scope=${{ inputs.image_name }}-${{ matrix.platform }}
-            *.cache-to=${{ github.ref_protected && format('type=gha,mode=max,scope=${{ inputs.image_name }}-${{ matrix.platform }}') || '' }}
+            *.cache-to=${{ needs.safety-checklist.outputs.is_fork_pr == 'false' && format('type=gha,mode=max,scope=${{ inputs.image_name }}-${{ matrix.platform }}') || '' }}
             *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ needs.safety-checklist.outputs.registry }}/${{ inputs.image_name }},push=true
             ${{ steps.cg_token.outputs.token != '' && '*.secrets=id=chainguard_apk_token,env=CHAINGUARD_APK_TOKEN' || '' }}
             ${{ inputs.set }}
