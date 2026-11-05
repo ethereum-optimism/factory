@@ -22,6 +22,7 @@ API_VERSION = "2022-11-28"
 WRITE_PERMISSIONS = {"admin", "maintain", "push", "write"}
 APPROVE_RE = re.compile(r"^/approve\s+([a-f0-9]{12,40})\s*$", re.IGNORECASE)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+MAX_STACK_DEPTH = 20
 
 
 class APIError(RuntimeError):
@@ -112,6 +113,37 @@ def evaluate_merge_group(client: "GitHubAPI", event: dict[str, Any]) -> None:
 
 def protected_bases(config: Config, default_branch: str) -> tuple[str, ...]:
     return config.protected_bases or (default_branch,)
+
+
+def base_ref(pr: dict[str, Any]) -> str:
+    return str(((pr.get("base") or {}).get("ref")) or "")
+
+
+def open_pulls_from_branch(
+    client: "GitHubAPI", branch: str
+) -> tuple[list[dict[str, Any]], bool]:
+    owner = client.repository.split("/", 1)[0]
+    head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    return client.paginate(
+        f"/repos/{client.repository}/pulls?state=open&head={head}&per_page=100", 100
+    )
+
+
+def stacks_onto_protected_base(
+    client: "GitHubAPI", bases: tuple[str, ...], branch: str, depth: int = 0
+) -> bool:
+    if branch in bases:
+        return True
+    if depth >= MAX_STACK_DEPTH:
+        print(f"Stack at {branch!r} is deeper than {MAX_STACK_DEPTH}; failing closed")
+        return True
+    pulls, pulls_incomplete = open_pulls_from_branch(client, branch)
+    if pulls_incomplete:
+        print(f"Open pull requests from {branch!r} could not be fully listed; failing closed")
+        return True
+    return any(
+        stacks_onto_protected_base(client, bases, base_ref(pull), depth + 1) for pull in pulls
+    )
 
 
 def commit_email(commit: dict[str, Any], role: str) -> str:
@@ -304,6 +336,13 @@ class GitHubAPI:
         self._permission_cache[login_lower] = allowed
         return allowed
 
+    def status_state(self, sha: str) -> str | None:
+        combined = self.get(f"/repos/{self.repository}/commits/{sha}/status?per_page=100")
+        for status in (combined or {}).get("statuses") or []:
+            if status.get("context") == CHECK_NAME:
+                return str(status.get("state") or "")
+        return None
+
     def post_status(self, sha: str, state: str, description: str) -> None:
         suffix = f" [{sha[:12]}]"
         message = description
@@ -381,7 +420,7 @@ def status_comment(
         lines.append(f"Stale SHA-bound approvals: {stale_text}")
     if siblings:
         lines.append(
-            "Blocked because another protected-base pull request shares this head: "
+            "Blocked because another open pull request shares this head: "
             + ", ".join(f"#{number}" for number in siblings)
         )
     elif sibling_list_incomplete:
@@ -398,6 +437,18 @@ def status_comment(
     return "\n".join(lines)
 
 
+def revoke_success_from_ungated_pull_request(
+    client: GitHubAPI, pr_number: int, base: str, head_sha: str
+) -> None:
+    if client.status_state(head_sha) != "success":
+        print(f"PR #{pr_number} targets ungated base {base!r}; no status posted")
+        return
+    print(f"PR #{pr_number} targets ungated base {base!r}; revoking earlier success")
+    client.post_status(
+        head_sha, "pending", "Not gated now; re-run if it stacks onto a protected base"
+    )
+
+
 def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
     repo = client.get(f"/repos/{client.repository}")
     default_branch = str(repo.get("default_branch") or "")
@@ -406,13 +457,13 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
     bases = protected_bases(config, default_branch)
 
     pr = client.get(f"/repos/{client.repository}/pulls/{pr_number}")
-    base = str(((pr.get("base") or {}).get("ref")) or "")
-    if base not in bases:
-        print(f"PR #{pr_number} targets unprotected base {base!r}; no status posted")
-        return
     head_sha = str(((pr.get("head") or {}).get("sha")) or "")
     if not re.fullmatch(r"[a-f0-9]{40}", head_sha, re.IGNORECASE):
         raise APIError("pull-request head SHA is invalid")
+    base = base_ref(pr)
+    if not stacks_onto_protected_base(client, bases, base):
+        revoke_success_from_ungated_pull_request(client, pr_number, base, head_sha)
+        return
 
     client.post_status(head_sha, "pending", "Evaluation in progress")
 
@@ -437,7 +488,6 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
         if int(other.get("number") or 0) != pr_number
         and other.get("state") == "open"
         and str(((other.get("head") or {}).get("sha")) or "") == head_sha
-        and str(((other.get("base") or {}).get("ref")) or "") in bases
     )
 
     agent_activity, reason = detect_agent_activity(
@@ -455,7 +505,7 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
                 sibling_list_incomplete,
             )
             client.upsert_comment(comments, body)
-            client.post_status(head_sha, "pending", "Another protected PR shares this head")
+            client.post_status(head_sha, "pending", "Another open PR shares this head")
             return
         client.post_status(head_sha, "success", "No agent activity")
         return
@@ -480,7 +530,7 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
         raise APIError("pull-request head changed during evaluation")
 
     if siblings or sibling_list_incomplete:
-        client.post_status(head_sha, "pending", "Another protected PR shares this head")
+        client.post_status(head_sha, "pending", "Another open PR shares this head")
     elif len(approvers) >= config.required_approvals:
         client.post_status(
             head_sha,
