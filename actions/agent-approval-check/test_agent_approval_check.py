@@ -1,5 +1,6 @@
 import os
 import unittest
+import urllib.parse
 
 import agent_approval_check as approval
 
@@ -72,6 +73,16 @@ class FakeAPI:
         self.statuses = []
         self.comment_bodies = []
         self.current_head = HEAD
+        self.open_pulls_by_head = {}
+        self.open_pulls_incomplete_heads = set()
+        self.existing_status_state = None
+
+    def stack(self, *branches):
+        self.pr["base"] = {"ref": branches[0]}
+        for number, (head, base) in enumerate(zip(branches, branches[1:]), start=100):
+            self.open_pulls_by_head.setdefault(head, []).append(
+                {"number": number, "head": {"ref": head}, "base": {"ref": base}}
+            )
 
     def get(self, path):
         if path == "/repos/example/repo":
@@ -91,10 +102,19 @@ class FakeAPI:
             return self.comments, False
         if f"/commits/{HEAD}/pulls?" in path:
             return self.associated, self.siblings_incomplete
+        if path.startswith("/repos/example/repo/pulls?state=open&head=example%3A"):
+            head = urllib.parse.unquote(path.split("head=example%3A")[1].split("&")[0])
+            return (
+                self.open_pulls_by_head.get(head, []),
+                head in self.open_pulls_incomplete_heads,
+            )
         raise AssertionError(f"unexpected pagination path {path}")
 
     def has_write_permission(self, login):
         return login.lower() in self.permissions
+
+    def status_state(self, sha):
+        return self.existing_status_state
 
     def post_status(self, sha, state, description):
         self.statuses.append((sha, state, description))
@@ -307,7 +327,7 @@ class ProcessTest(unittest.TestCase):
         approval.process(api, config(), 7)
         self.assertEqual(
             api.statuses[-1][1:],
-            ("pending", "Another protected PR shares this head"),
+            ("pending", "Another open PR shares this head"),
         )
         self.assertIn("#8", api.comment_bodies[-1])
 
@@ -354,6 +374,115 @@ class ProcessTest(unittest.TestCase):
         api.pr["base"] = {"ref": "develop"}
         approval.process(api, config(), 7)
         self.assertEqual(api.statuses, [])
+
+    def test_ungated_pull_request_revokes_earlier_success(self):
+        api = FakeAPI()
+        api.pr["base"] = {"ref": "develop"}
+        api.existing_status_state = "success"
+
+        approval.process(api, config(), 7)
+
+        self.assertEqual(len(api.statuses), 1, "an ungated PR must post exactly one status")
+        self.assertEqual(
+            api.statuses[0][:2], (HEAD, "pending"), "an earlier success must be revoked"
+        )
+
+    def test_ungated_pull_request_leaves_pending_status_alone(self):
+        api = FakeAPI()
+        api.pr["base"] = {"ref": "develop"}
+        api.existing_status_state = "pending"
+
+        approval.process(api, config(), 7)
+
+        self.assertEqual(api.statuses, [], "only a success needs revoking")
+
+    def test_unprotected_stack_posts_no_status(self):
+        api = FakeAPI()
+        api.stack("feature/second", "feature/first", "develop")
+        approval.process(api, config(), 7)
+        self.assertEqual(api.statuses, [])
+
+
+class StackedPullRequestTest(unittest.TestCase):
+    def setUp(self):
+        os.environ["AGENT_APPROVAL_PR_NUMBER"] = "7"
+
+    def assert_evaluated_as_human(self, api):
+        self.assertEqual(
+            api.statuses,
+            [
+                (HEAD, "pending", "Evaluation in progress"),
+                (HEAD, "success", "No agent activity"),
+            ],
+        )
+
+    def test_pull_request_at_any_stack_position_is_evaluated(self):
+        stacks = {
+            "second": ("feature/first", "main"),
+            "third": ("feature/second", "feature/first", "main"),
+            "fourth": ("feature/third", "feature/second", "feature/first", "main"),
+        }
+        for position, branches in stacks.items():
+            with self.subTest(position=position):
+                api = FakeAPI()
+                api.stack(*branches)
+
+                approval.process(api, config(), 7)
+
+                self.assert_evaluated_as_human(api)
+
+    def test_stacked_agent_pull_request_requires_approvals(self):
+        api = FakeAPI()
+        api.pr["user"] = user("claude[bot]", "Bot")
+        api.stack("feature/second", "feature/first", "main")
+        approval.process(api, config(), 7)
+        self.assertEqual(api.statuses[-1][1:], ("pending", "Need 2 approvals (have 0)"))
+
+    def test_stack_branching_to_any_protected_base_is_evaluated(self):
+        api = FakeAPI()
+        api.stack("feature/shared", "develop")
+        api.open_pulls_by_head["feature/shared"].append(
+            {"number": 200, "head": {"ref": "feature/shared"}, "base": {"ref": "main"}}
+        )
+        approval.process(api, config(), 7)
+        self.assert_evaluated_as_human(api)
+
+    def test_stack_cycle_fails_closed(self):
+        api = FakeAPI()
+        api.stack("feature/loop-a", "feature/loop-b", "feature/loop-a")
+        approval.process(api, config(), 7)
+        self.assert_evaluated_as_human(api)
+
+    def test_stack_deeper_than_limit_fails_closed(self):
+        api = FakeAPI()
+        branches = [f"feature/level-{level}" for level in range(approval.MAX_STACK_DEPTH + 1)]
+        api.stack(*branches, "develop")
+        approval.process(api, config(), 7)
+        self.assert_evaluated_as_human(api)
+
+    def test_incomplete_open_pull_listing_fails_closed(self):
+        api = FakeAPI()
+        api.stack("feature/first", "develop")
+        api.open_pulls_incomplete_heads.add("feature/first")
+        approval.process(api, config(), 7)
+        self.assert_evaluated_as_human(api)
+
+    def test_sibling_with_ungated_base_holds_success_at_pending(self):
+        api = FakeAPI()
+        api.associated.append(
+            {
+                "number": 8,
+                "state": "open",
+                "head": {"sha": HEAD},
+                "base": {"ref": "feature/not-yet-stacked"},
+            }
+        )
+        approval.process(api, config(), 7)
+        self.assertEqual(
+            api.statuses[-1][1:],
+            ("pending", "Another open PR shares this head"),
+        )
+        self.assertIn("#8", api.comment_bodies[-1])
 
 
 if __name__ == "__main__":

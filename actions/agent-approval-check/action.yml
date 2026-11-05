@@ -18,7 +18,7 @@ inputs:
     description: Comma-separated machine-user logins that never count as humans
     default: ""
   protected_bases:
-    description: Comma-separated protected base branches; empty means the default branch
+    description: Comma-separated protected base branches; empty means the default branch. Pull requests stacked onto these bases are also gated
     default: ""
   agent_branch_prefixes:
     description: Comma-separated head-branch prefixes treated as agent-authored
