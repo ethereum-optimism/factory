@@ -18,7 +18,7 @@ name: agent-approval-check
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   pull_request_review:
     types: [submitted, dismissed]
   issue_comment:
@@ -94,8 +94,23 @@ review's `commit_id` equals the current head SHA; an approval left on an older
 commit is treated as stale and does not count. Configuring branch protection to
 dismiss stale reviews on push is still recommended as defense in depth.
 
-The action refuses to publish success when another open pull request to a
-protected base shares the same head SHA. GitHub commit statuses are SHA-scoped,
+## Stacked pull requests
+
+A pull request is gated when its base is a protected branch, or when its base is
+the head branch of an open pull request that is itself gated. The check follows
+this chain to any depth, so the third or fourth pull request in a stack receives
+the status that a stacked merge needs. Each pull request is evaluated on its own
+commits; the pull requests below it carry their own statuses.
+
+The chain is followed up to 20 levels. A deeper chain, including a cycle of
+branches, or a branch whose open pull requests cannot be fully listed, is treated
+as gated.
+
+Keep the `edited` trigger so that retargeting a pull request re-evaluates it.
+
+The action refuses to publish success when another open pull request shares
+the same head SHA, whatever its base. A pull request on an ungated base can
+become gated later, through a stack, without being re-evaluated. GitHub commit statuses are SHA-scoped,
 so this prevents approval evidence from one pull request unblocking another.
 
 ## Known limitations
@@ -113,6 +128,10 @@ so this prevents approval evidence from one pull request unblocking another.
   its own (only `issue_comment.created` fires). The next push, review, or comment
   re-evaluates, and `/approve` comments are already invalidated by any new head
   SHA.
+- When a pull request stops being gated, any earlier success on its head is
+  replaced with pending. A stacked pull request opened before the pull request
+  beneath it is not re-evaluated when that lower pull request opens. The next push, review,
+  comment, or retarget of the stacked pull request posts its status.
 
 ## Required repository controls
 
