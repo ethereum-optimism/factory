@@ -16,6 +16,9 @@ and validate them with service-owned integration tests.
 - `.github/workflows/integration-test.yaml` — reusable integration-test
   workflow. Runs one or more service-owned test suites against a built image,
   with optional per-suite kind clusters.
+- `.github/workflows/agent-approval-check.yaml`: reusable workflow. Reports the
+  `agent-approval-check` status: agent-involved pull requests need two distinct
+  human approvals.
 - `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
   `renovate-config.json` — shared CVE-only Renovate baseline preset. See
   [Renovate](#renovate).
