@@ -1,0 +1,26 @@
+name: agent-approval-check
+
+on:
+  workflow_call:
+
+concurrency:
+  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: ethereum-optimism/factory/actions/agent-approval-check@3b9820b2acad0b7086b401fe4bdc06b24535cabf
+        with:
+          required_approvals: 2
+          agent_emails: noreply@anthropic.com,209825114+claude[bot]@users.noreply.github.com,198982749+Copilot@users.noreply.github.com,centaur@oplabs.co,ai@centaur.local,agent@centaur.dev,centaur-bot@users.noreply.github.com,56264719+centaur-bot@users.noreply.github.com,112345690+OptimismBot@users.noreply.github.com,OptimismBot@users.noreply.github.com,optibot@oplabs.co,188376469+opgitgovernance@users.noreply.github.com,opgitgovernance@users.noreply.github.com,githubgovernance@oplabs.co
+          agent_logins: claude[bot],claude-code[bot],Copilot,copilot-swe-agent[bot],centaur-bot,OptimismBot,opgitgovernance
+          excluded_approvers: OptimismBot,opgitgovernance
+          agent_branch_prefixes: centaur/,claude/,copilot/
