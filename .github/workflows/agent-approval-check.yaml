@@ -3,10 +3,6 @@ name: agent-approval-check
 on:
   workflow_call:
 
-concurrency:
-  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_ref }}
-  cancel-in-progress: true
-
 jobs:
   check:
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request
@@ -17,7 +13,7 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      - uses: ethereum-optimism/factory/actions/agent-approval-check@3b9820b2acad0b7086b401fe4bdc06b24535cabf
+      - uses: ethereum-optimism/factory/actions/agent-approval-check@7517da65f053390e649dbcae280ba327f9ee9372
         with:
           required_approvals: 2
           agent_emails: noreply@anthropic.com,209825114+claude[bot]@users.noreply.github.com,198982749+Copilot@users.noreply.github.com,centaur@oplabs.co,ai@centaur.local,agent@centaur.dev,centaur-bot@users.noreply.github.com,56264719+centaur-bot@users.noreply.github.com,112345690+OptimismBot@users.noreply.github.com,OptimismBot@users.noreply.github.com,optibot@oplabs.co,188376469+opgitgovernance@users.noreply.github.com,opgitgovernance@users.noreply.github.com,githubgovernance@oplabs.co
