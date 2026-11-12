@@ -11,9 +11,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 CHECK_NAME = "agent-approval-check"
@@ -23,12 +23,29 @@ WRITE_PERMISSIONS = {"admin", "maintain", "push", "write"}
 APPROVE_RE = re.compile(r"^/approve\s+([a-f0-9]{12,40})\s*$", re.IGNORECASE)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 MAX_STACK_DEPTH = 20
+MAX_PUBLISHES = 5
+UNSTABLE_DESCRIPTION = "Approval state changed during evaluation; re-run"
 
 
 class APIError(RuntimeError):
     def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
         self.status = status
+
+
+class HeadMovedError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Decision:
+    head_sha: str
+    state: str | None
+    description: str
+    approvers: tuple[str, ...] = ()
+    comment_body: str | None = None
+    comments: tuple[dict[str, Any], ...] = field(default=(), compare=False)
+    gated: bool = True
 
 
 @dataclass(frozen=True)
@@ -437,19 +454,30 @@ def status_comment(
     return "\n".join(lines)
 
 
-def revoke_success_from_ungated_pull_request(
+def ungated_decision(
     client: GitHubAPI, pr_number: int, base: str, head_sha: str
-) -> None:
+) -> Decision:
+    description = "Not gated now; re-run if it stacks onto a protected base"
     if client.status_state(head_sha) != "success":
         print(f"PR #{pr_number} targets ungated base {base!r}; no status posted")
-        return
+        return Decision(head_sha, None, description, gated=False)
     print(f"PR #{pr_number} targets ungated base {base!r}; revoking earlier success")
-    client.post_status(
-        head_sha, "pending", "Not gated now; re-run if it stacks onto a protected base"
-    )
+    return Decision(head_sha, "pending", description, gated=False)
 
 
-def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
+def evaluate(
+    client: GitHubAPI,
+    config: Config,
+    pr_number: int,
+    expected_head: str | None = None,
+    begin: Callable[[str], None] | None = None,
+) -> Decision:
+    """Read the pull request and return the status decision without writing.
+
+    ``begin`` is called with the head SHA once the pull request is known to be
+    gated, before any review or comment is read. Raises HeadMovedError when the
+    head differs from ``expected_head``.
+    """
     repo = client.get(f"/repos/{client.repository}")
     default_branch = str(repo.get("default_branch") or "")
     if not default_branch:
@@ -460,12 +488,16 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
     head_sha = str(((pr.get("head") or {}).get("sha")) or "")
     if not re.fullmatch(r"[a-f0-9]{40}", head_sha, re.IGNORECASE):
         raise APIError("pull-request head SHA is invalid")
+    if expected_head is not None and head_sha != expected_head:
+        raise HeadMovedError(
+            f"PR #{pr_number} head moved from {expected_head} to {head_sha}"
+        )
     base = base_ref(pr)
     if not stacks_onto_protected_base(client, bases, base):
-        revoke_success_from_ungated_pull_request(client, pr_number, base, head_sha)
-        return
+        return ungated_decision(client, pr_number, base, head_sha)
 
-    client.post_status(head_sha, "pending", "Evaluation in progress")
+    if begin is not None:
+        begin(head_sha)
 
     commits, commits_incomplete = client.paginate(
         f"/repos/{client.repository}/pulls/{pr_number}/commits?per_page=100", 100
@@ -504,11 +536,14 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
                 siblings,
                 sibling_list_incomplete,
             )
-            client.upsert_comment(comments, body)
-            client.post_status(head_sha, "pending", "Another open PR shares this head")
-            return
-        client.post_status(head_sha, "success", "No agent activity")
-        return
+            return Decision(
+                head_sha,
+                "pending",
+                "Another open PR shares this head",
+                comment_body=body,
+                comments=tuple(comments),
+            )
+        return Decision(head_sha, "success", "No agent activity")
 
     candidates, stale = approval_candidates(head_sha, reviews, comments, config)
     approvers = {login for login in candidates if client.has_write_permission(login)}
@@ -522,27 +557,73 @@ def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
         siblings,
         sibling_list_incomplete,
     )
-    client.upsert_comment(comments, body)
+    if siblings or sibling_list_incomplete:
+        state, description = "pending", "Another open PR shares this head"
+    elif len(approvers) >= config.required_approvals:
+        state = "success"
+        description = f"{len(approvers)}/{config.required_approvals} human approvals"
+    else:
+        state = "pending"
+        description = (
+            f"Need {config.required_approvals} approvals (have {len(approvers)})"
+        )
+    return Decision(
+        head_sha,
+        state,
+        description,
+        approvers=tuple(sorted(approvers)),
+        comment_body=body,
+        comments=tuple(comments),
+    )
 
+
+def publish(client: GitHubAPI, pr_number: int, decision: Decision) -> bool:
+    """Upsert the decision's comment and post its status.
+
+    The pull-request head is re-read before posting. Returns False without
+    posting when the head differs from the evaluated head.
+    """
+    if decision.comment_body is not None:
+        client.upsert_comment(list(decision.comments), decision.comment_body)
     current_pr = client.get(f"/repos/{client.repository}/pulls/{pr_number}")
     current_head = str(((current_pr.get("head") or {}).get("sha")) or "")
-    if current_head != head_sha:
-        raise APIError("pull-request head changed during evaluation")
+    if current_head != decision.head_sha:
+        print(
+            f"PR #{pr_number} head moved to {current_head}; "
+            f"not posting status for {decision.head_sha}"
+        )
+        return False
+    if decision.state is not None:
+        client.post_status(decision.head_sha, decision.state, decision.description)
+    return True
 
-    if siblings or sibling_list_incomplete:
-        client.post_status(head_sha, "pending", "Another open PR shares this head")
-    elif len(approvers) >= config.required_approvals:
-        client.post_status(
-            head_sha,
-            "success",
-            f"{len(approvers)}/{config.required_approvals} human approvals",
-        )
-    else:
-        client.post_status(
-            head_sha,
-            "pending",
-            f"Need {config.required_approvals} approvals (have {len(approvers)})",
-        )
+
+def process(client: GitHubAPI, config: Config, pr_number: int) -> None:
+    """Evaluate and publish until a fresh evaluation matches the published decision."""
+
+    def begin(head_sha: str) -> None:
+        client.post_status(head_sha, "pending", "Evaluation in progress")
+
+    decision = evaluate(client, config, pr_number, begin=begin)
+    if not decision.gated:
+        publish(client, pr_number, decision)
+        return
+    for _ in range(MAX_PUBLISHES):
+        if not publish(client, pr_number, decision):
+            return
+        try:
+            latest = evaluate(client, config, pr_number, expected_head=decision.head_sha)
+        except HeadMovedError as exc:
+            print(exc)
+            return
+        if latest == decision:
+            return
+        decision = latest
+    publish(
+        client,
+        pr_number,
+        Decision(decision.head_sha, "pending", UNSTABLE_DESCRIPTION),
+    )
 
 
 def main() -> int:
