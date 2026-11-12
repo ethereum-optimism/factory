@@ -48,7 +48,9 @@ jobs:
 
 Runs for the same pull request may overlap without cancellation. Each run
 re-evaluates after posting and re-posts until two consecutive evaluations agree,
-so the final status reflects the current approvals.
+so the final status reflects the current approvals. If the head moves during a
+run, that run stops without posting for the old head, and the run triggered by
+the push is authoritative for the new head.
 
 Make the exact `agent-approval-check` commit status required on every protected
 base branch. Land and exercise the workflow before making the status required,
