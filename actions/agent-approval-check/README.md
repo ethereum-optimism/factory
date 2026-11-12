@@ -25,10 +25,6 @@ on:
     types: [created]
   merge_group:
 
-concurrency:
-  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: write
@@ -49,6 +45,10 @@ jobs:
           protected_bases: main
           agent_branch_prefixes: ""
 ```
+
+Runs for the same pull request may overlap without cancellation. Each run
+re-evaluates after posting and re-posts until two consecutive evaluations agree,
+so the final status reflects the current approvals.
 
 Make the exact `agent-approval-check` commit status required on every protected
 base branch. Land and exercise the workflow before making the status required,
@@ -81,8 +81,8 @@ must contain at least 12 hexadecimal characters.
 
 Native approving reviews trigger reevaluation through the `pull_request_review`
 event, so a normal GitHub Approve is picked up immediately. This action never
-checks out or executes pull-request code — it only reads the API and posts a
-status from its pinned action code — so the merge-ref concern that leads some
+checks out or executes pull-request code. It only reads the API and posts a
+status from its pinned action code, so the merge-ref concern that leads some
 workflows to omit `pull_request_review` does not apply here. Commenting
 `/approve <current-head-sha>` remains available as an equivalent path. Duplicate
 approval mechanisms from one login still count once.
@@ -140,4 +140,3 @@ so this prevents approval evidence from one pull request unblocking another.
 - Require approval of the latest reviewable push where available.
 - Do not give agent identities ruleset or branch-protection bypass rights.
 - Keep the workflow token limited to the permissions shown above.
-- Keep the per-pull-request concurrency group and `cancel-in-progress` enabled.

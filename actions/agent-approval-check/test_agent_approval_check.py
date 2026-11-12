@@ -1,6 +1,9 @@
+import json
 import os
+import tempfile
 import unittest
 import urllib.parse
+from unittest import mock
 
 import agent_approval_check as approval
 
@@ -347,7 +350,7 @@ class ProcessTest(unittest.TestCase):
             approval.process(api, config(), 7)
         self.assertEqual(api.statuses, [(HEAD, "pending", "Evaluation in progress")])
 
-    def test_head_change_during_evaluation_never_posts_success(self):
+    def test_head_change_before_post_never_posts_status(self):
         api = FakeAPI()
         api.pr["user"] = user("claude[bot]", "Bot")
         api.reviews = [review("alice"), review("bob", review_id=2)]
@@ -365,8 +368,7 @@ class ProcessTest(unittest.TestCase):
             return result
 
         api.get = changing_get
-        with self.assertRaises(approval.APIError):
-            approval.process(api, config(), 7)
+        approval.process(api, config(), 7)
         self.assertEqual(api.statuses, [(HEAD, "pending", "Evaluation in progress")])
 
     def test_unprotected_base_posts_no_status(self):
@@ -483,6 +485,122 @@ class StackedPullRequestTest(unittest.TestCase):
             ("pending", "Another open PR shares this head"),
         )
         self.assertIn("#8", api.comment_bodies[-1])
+
+
+class ConvergenceTest(unittest.TestCase):
+    def setUp(self):
+        os.environ["AGENT_APPROVAL_PR_NUMBER"] = "7"
+
+    def agent_api(self):
+        api = FakeAPI()
+        api.pr["user"] = user("claude[bot]", "Bot")
+        api.reviews = [review("alice"), review("bob", review_id=2)]
+        api.permissions = {"alice", "bob"}
+        return api
+
+    def after_each_post(self, api, change):
+        original_post = api.post_status
+
+        def post_then_change(sha, state, description):
+            original_post(sha, state, description)
+            if description != "Evaluation in progress":
+                change(state)
+
+        api.post_status = post_then_change
+
+    def test_dismissal_between_evaluations_converges_to_pending(self):
+        api = self.agent_api()
+
+        def dismiss_bob(state):
+            if state == "success":
+                api.reviews = [review("alice"), review("bob", "DISMISSED", review_id=3)]
+
+        self.after_each_post(api, dismiss_bob)
+        approval.process(api, config(), 7)
+
+        self.assertEqual(api.statuses[1], (HEAD, "success", "2/2 human approvals"))
+        self.assertEqual(
+            api.statuses[-1], (HEAD, "pending", "Need 2 approvals (have 1)")
+        )
+        self.assertEqual(len(api.comment_bodies), 2)
+
+    def test_stable_evaluation_publishes_once(self):
+        api = self.agent_api()
+        approval.process(api, config(), 7)
+        self.assertEqual(
+            api.statuses,
+            [
+                (HEAD, "pending", "Evaluation in progress"),
+                (HEAD, "success", "2/2 human approvals"),
+            ],
+        )
+        self.assertEqual(len(api.comment_bodies), 1)
+
+    def test_head_change_between_evaluations_stops_without_new_status(self):
+        api = self.agent_api()
+
+        def move_head(state):
+            if state == "success":
+                api.current_head = OLD_HEAD
+
+        self.after_each_post(api, move_head)
+        self.assertIsNone(approval.process(api, config(), 7))
+
+        self.assertEqual(
+            api.statuses,
+            [
+                (HEAD, "pending", "Evaluation in progress"),
+                (HEAD, "success", "2/2 human approvals"),
+            ],
+        )
+        self.assertNotIn(OLD_HEAD, [sha for sha, _, _ in api.statuses])
+
+    def test_main_returns_zero_when_head_moves_between_evaluations(self):
+        api = self.agent_api()
+
+        def move_head(state):
+            if state == "success":
+                api.current_head = OLD_HEAD
+
+        self.after_each_post(api, move_head)
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = os.path.join(tmp, "event.json")
+            with open(event_path, "w", encoding="utf-8") as handle:
+                json.dump({"pull_request": {"number": 7}}, handle)
+            env = {
+                "GITHUB_EVENT_NAME": "pull_request_target",
+                "GITHUB_EVENT_PATH": event_path,
+                "GITHUB_REPOSITORY": "example/repo",
+                "GH_TOKEN": "token",
+                "AGENT_EMAILS": "noreply@anthropic.com",
+                "AGENT_LOGINS": "claude[bot],claude-code[bot]",
+                "REQUIRED_APPROVALS": "2",
+            }
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                approval, "GitHubAPI", return_value=api
+            ):
+                self.assertEqual(approval.main(), 0)
+
+        self.assertNotIn(OLD_HEAD, [sha for sha, _, _ in api.statuses])
+
+    def test_never_stable_posts_unstable_pending_after_five_publishes(self):
+        api = self.agent_api()
+        flips = 0
+
+        def flip_bob(state):
+            nonlocal flips
+            flips += 1
+            bob_state = "DISMISSED" if flips % 2 else "APPROVED"
+            api.reviews = [review("alice"), review("bob", bob_state, review_id=flips + 1)]
+
+        self.after_each_post(api, flip_bob)
+        approval.process(api, config(), 7)
+
+        self.assertEqual(len(api.comment_bodies), 5)
+        self.assertEqual(
+            api.statuses[-1],
+            (HEAD, "pending", "Approval state changed during evaluation; re-run"),
+        )
 
 
 if __name__ == "__main__":
