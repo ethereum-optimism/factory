@@ -32,7 +32,10 @@ permissions:
 
 jobs:
   check:
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    if: >-
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
+      (github.event_name != 'pull_request_review' ||
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -88,6 +91,12 @@ status from its pinned action code, so the merge-ref concern that leads some
 workflows to omit `pull_request_review` does not apply here. Commenting
 `/approve <current-head-sha>` remains available as an equivalent path. Duplicate
 approval mechanisms from one login still count once.
+
+On pull requests from forks, `pull_request_review` runs receive a read-only
+token and cannot post a status, so the reusable workflow skips them. After
+approving a fork pull request, post any comment (or
+`/approve <current-head-sha>`) to reevaluate; the `issue_comment` run counts
+native approvals as well.
 
 Every evaluation first posts a pending status on the current head SHA. Errors
 thereafter leave that required status non-successful. A new head SHA invalidates
