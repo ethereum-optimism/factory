@@ -17,16 +17,16 @@ and validate them with service-owned integration tests.
   workflow. Runs one or more service-owned test suites against a built image,
   with optional per-suite kind clusters.
 - `.github/workflows/agent-approval-check.yaml`: reusable workflow. Reports the
-  `agent-approval-check` status: agent-involved pull requests need two distinct
-  human approvals.
+  `agent-approval-check` status: pull requests opened by agent accounts need two
+  distinct human approvals.
 - `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
   `renovate-config.json` — shared CVE-only Renovate baseline preset. See
   [Renovate](#renovate).
 - `actions/detect-changes`, `actions/parse-tag` — legacy composite actions
   retained for compatibility; new consumers should use `actions/plan`.
-- `actions/agent-approval-check` — dependency-free approval gate for
-  agent-authored pull requests. Requires distinct write-capable human approvals
-  and publishes the `agent-approval-check` commit status.
+- `actions/agent-approval-check`: dependency-free approval gate for pull
+  requests opened by agent accounts. Requires distinct write-capable human
+  approvals and publishes the `agent-approval-check` commit status.
 - `actions/release-notes` — publishes customer-facing Markdown as an OCI 1.1
   attachment to an image digest. Customers can retrieve the notes using their
   Artifact Registry access. See [publishing and downloading release notes](actions/release-notes/README.md).

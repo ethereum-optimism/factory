@@ -1,7 +1,7 @@
 # Agent approval check
 
-Require distinct, write-capable human approvals before an agent-authored pull
-request can merge. Human-only pull requests receive a successful status without
+Require distinct, write-capable human approvals before a pull request opened by
+an agent account can merge. Human-only pull requests receive a successful status without
 changing the repository's normal review policy.
 
 The action has no third-party runtime dependencies. It uses Python's standard
@@ -39,11 +39,9 @@ jobs:
       - uses: ethereum-optimism/factory/actions/agent-approval-check@<full-commit-sha>
         with:
           required_approvals: 2
-          agent_emails: noreply@anthropic.com
           agent_logins: claude[bot],claude-code[bot]
           excluded_approvers: OptimismBot
           protected_bases: main
-          agent_branch_prefixes: ""
 ```
 
 Runs for the same pull request may overlap without cancellation. Each run
@@ -65,19 +63,15 @@ the approval requirement was enforced before the merge-group commit was created.
 
 ## Approval behavior
 
-An agent-authored pull request is detected when any of these conditions holds:
-
-- The pull-request author matches `agent_logins`.
-- A commit author or committer email matches `agent_emails`.
-- The head branch starts with one of `agent_branch_prefixes`. This detects
-  agents that open pull requests from a shared account and commit under an
-  identity that would otherwise be unsafe to gate.
-- An agent identity submits an approving review.
-- The pull request has more than 100 commits and cannot be fully inspected.
+A pull request is gated when its author matches `agent_logins`, case-insensitively.
+Commit authors, commit emails, head-branch names, and reviews do not affect
+whether a pull request is gated. Human-authored pull requests receive a
+successful status and rely on the repository's native review rules.
 
 An approval counts only when the user currently has write, maintain, or admin
 access and is neither a GitHub Bot nor listed in `agent_logins` or
-`excluded_approvers`. A human can approve with a native approving review or a
+`excluded_approvers`. Approvals from `agent_logins` never count, even on a
+pull request authored by a human. A human can approve with a native approving review or a
 comment whose first line is exactly `/approve <current-head-sha>`. SHA prefixes
 must contain at least 12 hexadecimal characters.
 
