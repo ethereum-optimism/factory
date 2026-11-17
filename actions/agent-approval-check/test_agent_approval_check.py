@@ -44,14 +44,12 @@ def commit(email="human@example.com"):
     }
 
 
-def config(required=2, excluded=(), branch_prefixes=()):
+def config(required=2, excluded=()):
     return approval.Config(
         required_approvals=required,
-        agent_emails=frozenset({"noreply@anthropic.com"}),
         agent_logins=frozenset({"claude[bot]", "claude-code[bot]"}),
         excluded_approvers=frozenset(value.lower() for value in excluded),
         protected_bases=("main",),
-        agent_branch_prefixes=tuple(branch_prefixes),
     )
 
 
@@ -66,8 +64,7 @@ class FakeAPI:
             "head": {"sha": HEAD},
             "base": {"ref": "main"},
         }
-        self.commits = [commit()]
-        self.commits_incomplete = False
+        self.commits = []
         self.reviews = []
         self.comments = []
         self.associated = [self.pr]
@@ -98,7 +95,7 @@ class FakeAPI:
 
     def paginate(self, path, maximum):
         if "/pulls/7/commits?" in path:
-            return self.commits, self.commits_incomplete
+            return self.commits, False
         if "/pulls/7/reviews?" in path:
             return self.reviews, False
         if "/issues/7/comments?" in path:
@@ -145,41 +142,16 @@ class HelpersTest(unittest.TestCase):
         latest = approval.latest_reviews(reviews)
         self.assertEqual(latest["alice"]["state"], "CHANGES_REQUESTED")
 
-    def test_agent_detection_checks_author_and_committer(self):
-        pr = {"user": user("human")}
-        found, reason = approval.detect_agent_activity(
-            pr, [commit("noreply@anthropic.com")], False, [], config()
-        )
-        self.assertTrue(found)
-        self.assertIn("agent author email", reason)
-
     def test_agent_login_is_case_insensitive(self):
         pr = {"user": user("Claude[bot]", "Bot")}
-        found, _ = approval.detect_agent_activity(pr, [commit()], False, [], config())
+        found, _ = approval.detect_agent_activity(pr, config())
         self.assertTrue(found)
 
-    def test_agent_branch_prefix_detected_regardless_of_identity(self):
-        pr = {"user": user("bot-account"), "head": {"sha": HEAD, "ref": "agent/some-change"}}
-        found, reason = approval.detect_agent_activity(
-            pr, [commit("shared@example.com")], False, [], config(branch_prefixes=("agent/",))
-        )
-        self.assertTrue(found)
-        self.assertIn("agent/", reason)
-
-    def test_non_agent_branch_prefix_not_detected(self):
-        pr = {"user": user("bot-account"), "head": {"sha": HEAD, "ref": "feature/other-change"}}
-        found, _ = approval.detect_agent_activity(
-            pr, [commit("human@example.com")], False, [], config(branch_prefixes=("agent/",))
-        )
-        self.assertFalse(found)
-
-    def test_more_than_one_hundred_commits_fails_closed(self):
+    def test_human_author_is_not_agent(self):
         pr = {"user": user("human")}
-        found, reason = approval.detect_agent_activity(
-            pr, [commit()], True, [], config()
-        )
-        self.assertTrue(found)
-        self.assertIn("more than 100 commits", reason)
+        found, reason = approval.detect_agent_activity(pr, config())
+        self.assertFalse(found)
+        self.assertEqual(reason, "No agent activity")
 
     def test_resolve_event(self):
         self.assertEqual(
@@ -261,6 +233,35 @@ class ProcessTest(unittest.TestCase):
             ],
         )
         self.assertEqual(api.comment_bodies, [])
+
+    def test_human_pull_request_with_agent_commit_email_is_not_gated(self):
+        api = FakeAPI()
+        api.commits = [commit("noreply@anthropic.com")]
+        approval.process(api, config(), 7)
+        self.assertEqual(
+            api.statuses,
+            [
+                (HEAD, "pending", "Evaluation in progress"),
+                (HEAD, "success", "No agent activity"),
+            ],
+        )
+        self.assertEqual(api.comment_bodies, [])
+
+    def test_agent_pull_request_with_one_human_approval_stays_pending(self):
+        api = FakeAPI()
+        api.pr["user"] = user("claude[bot]", "Bot")
+        api.reviews = [review("alice")]
+        api.permissions = {"alice"}
+        approval.process(api, config(), 7)
+        self.assertEqual(api.statuses[-1][1:], ("pending", "Need 2 approvals (have 1)"))
+
+    def test_agent_pull_request_with_two_human_approvals_succeeds(self):
+        api = FakeAPI()
+        api.pr["user"] = user("claude[bot]", "Bot")
+        api.reviews = [review("alice"), review("bob", review_id=2)]
+        api.permissions = {"alice", "bob"}
+        approval.process(api, config(), 7)
+        self.assertEqual(api.statuses[-1][1:], ("success", "2/2 human approvals"))
 
     def test_agent_pull_request_stays_pending_without_approvals(self):
         api = FakeAPI()
@@ -572,7 +573,6 @@ class ConvergenceTest(unittest.TestCase):
                 "GITHUB_EVENT_PATH": event_path,
                 "GITHUB_REPOSITORY": "example/repo",
                 "GH_TOKEN": "token",
-                "AGENT_EMAILS": "noreply@anthropic.com",
                 "AGENT_LOGINS": "claude[bot],claude-code[bot]",
                 "REQUIRED_APPROVALS": "2",
             }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed approval gate for agent-authored pull requests."""
+"""Fail-closed approval gate for pull requests opened by agent accounts."""
 
 from __future__ import annotations
 
@@ -51,11 +51,9 @@ class Decision:
 @dataclass(frozen=True)
 class Config:
     required_approvals: int
-    agent_emails: frozenset[str]
     agent_logins: frozenset[str]
     excluded_approvers: frozenset[str]
     protected_bases: tuple[str, ...]
-    agent_branch_prefixes: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -65,19 +63,16 @@ class Config:
             raise ValueError("required_approvals must be an integer") from exc
         if required < 1:
             raise ValueError("required_approvals must be at least 1")
-        emails = frozenset(value.lower() for value in csv("AGENT_EMAILS"))
         logins = frozenset(value.lower() for value in csv("AGENT_LOGINS"))
-        if not emails and not logins:
-            raise ValueError("at least one agent email or login is required")
+        if not logins:
+            raise ValueError("at least one agent login is required")
         return cls(
             required_approvals=required,
-            agent_emails=emails,
             agent_logins=logins,
             excluded_approvers=frozenset(
                 value.lower() for value in csv("EXCLUDED_APPROVERS")
             ),
             protected_bases=tuple(csv("PROTECTED_BASES")),
-            agent_branch_prefixes=tuple(csv("AGENT_BRANCH_PREFIXES")),
         )
 
 
@@ -163,42 +158,10 @@ def stacks_onto_protected_base(
     )
 
 
-def commit_email(commit: dict[str, Any], role: str) -> str:
-    identity = ((commit.get("commit") or {}).get(role) or {})
-    return str(identity.get("email") or "").lower()
-
-
-def detect_agent_activity(
-    pr: dict[str, Any],
-    commits: list[dict[str, Any]],
-    commits_incomplete: bool,
-    reviews: list[dict[str, Any]],
-    config: Config,
-) -> tuple[bool, str]:
-    if commits_incomplete:
-        return True, "Pull request has more than 100 commits"
-
-    for commit in commits:
-        for role in ("author", "committer"):
-            email = commit_email(commit, role)
-            if email and email in config.agent_emails:
-                short_sha = str(commit.get("sha") or "")[:12]
-                return True, f"Commit {short_sha} has agent {role} email ({email})"
-
+def detect_agent_activity(pr: dict[str, Any], config: Config) -> tuple[bool, str]:
     login = user_login(pr)
     if login.lower() in config.agent_logins:
         return True, f"Pull request was created by {login}"
-
-    head_ref = str(((pr.get("head") or {}).get("ref")) or "")
-    for prefix in config.agent_branch_prefixes:
-        if prefix and head_ref.startswith(prefix):
-            return True, f"Head branch {head_ref} matches agent prefix {prefix}"
-
-    for review in reviews:
-        login = user_login(review)
-        if review.get("state") == "APPROVED" and login.lower() in config.agent_logins:
-            return True, f"Pull request has an approving review from {login}"
-
     return False, "No agent activity"
 
 
@@ -499,9 +462,6 @@ def evaluate(
     if begin is not None:
         begin(head_sha)
 
-    commits, commits_incomplete = client.paginate(
-        f"/repos/{client.repository}/pulls/{pr_number}/commits?per_page=100", 100
-    )
     reviews, reviews_incomplete = client.paginate(
         f"/repos/{client.repository}/pulls/{pr_number}/reviews?per_page=100", 1000
     )
@@ -522,9 +482,7 @@ def evaluate(
         and str(((other.get("head") or {}).get("sha")) or "") == head_sha
     )
 
-    agent_activity, reason = detect_agent_activity(
-        pr, commits, commits_incomplete, reviews, config
-    )
+    agent_activity, reason = detect_agent_activity(pr, config)
     if not agent_activity:
         if siblings or sibling_list_incomplete:
             body = status_comment(
@@ -593,6 +551,10 @@ def publish(client: GitHubAPI, pr_number: int, decision: Decision) -> bool:
             f"not posting status for {decision.head_sha}"
         )
         return False
+    print(
+        f"Decision for PR #{pr_number}: state={decision.state} "
+        f"description={decision.description!r} approvers={list(decision.approvers)}"
+    )
     if decision.state is not None:
         client.post_status(decision.head_sha, decision.state, decision.description)
     return True
