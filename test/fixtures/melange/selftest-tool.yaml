@@ -1,0 +1,23 @@
+package:
+  name: selftest-tool
+  version: 1.0.0
+  epoch: 0
+  description: Fixture package for the build-images self-test
+  copyright:
+    - license: MIT
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - wolfi-baselayout
+      - busybox
+
+pipeline:
+  - runs: |
+      mkdir -p "${{targets.destdir}}/usr/bin"
+      printf '#!/bin/sh\necho selftest-tool 1.0.0\n' > "${{targets.destdir}}/usr/bin/selftest-tool"
+      chmod 0755 "${{targets.destdir}}/usr/bin/selftest-tool"

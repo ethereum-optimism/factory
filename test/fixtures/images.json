@@ -56,6 +56,32 @@
           "/bin/sh -c true"
         ]
       }
+    },
+    "selftest-pkg": {
+      "builders": {
+        "apko": {
+          "config": "test/fixtures/apko/pkg.yaml",
+          "needs_packages": [
+            "selftest-tool"
+          ]
+        }
+      },
+      "paths": [
+        "test/fixtures/melange/**",
+        "test/fixtures/apko/**"
+      ],
+      "smoke": {
+        "commands": [],
+        "script": "test/fixtures/smoke/check-selftest-tool.sh"
+      }
+    }
+  },
+  "packages": {
+    "selftest-tool": {
+      "config": "test/fixtures/melange/selftest-tool.yaml",
+      "archs": [
+        "x86_64"
+      ]
     }
   }
 }
