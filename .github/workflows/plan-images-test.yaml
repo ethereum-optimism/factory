@@ -1,0 +1,38 @@
+name: plan-images tests
+
+on:
+  pull_request:
+    paths:
+      - actions/plan-images/**
+      - actions/fork-context/**
+      - scripts/lint-untrusted-permissions*
+      - .github/workflows/build-images*.yaml
+      - .github/workflows/plan-images-test.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - actions/plan-images/**
+      - actions/fork-context/**
+      - scripts/lint-untrusted-permissions*
+      - .github/workflows/build-images*.yaml
+      - .github/workflows/plan-images-test.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test plan-images
+        run: actions/plan-images/plan-images.test.sh
+
+      - name: Lint self-tests
+        run: scripts/lint-untrusted-permissions.test.sh

@@ -7,8 +7,9 @@ description: >
   policy.
 inputs:
   canonical_registry:
-    description: 'Registry to use on push, tag, and non-fork PR. Required.'
-    required: true
+    description: 'Registry to use on push, tag, and non-fork PR. Leave empty when only the trusted output is needed.'
+    required: false
+    default: ''
 outputs:
   is_fork:
     description: '"true" if this run is a pull_request from a fork, else "false".'
@@ -19,6 +20,12 @@ outputs:
   should_authenticate:
     description: '"true" when GCP auth + provenance attestation should run.'
     value: ${{ steps.compute.outputs.should_authenticate }}
+  trusted:
+    description: >
+      "true" when the run may publish: push, schedule, or workflow_dispatch on the
+      repository default branch, or any tag push. "false" for everything else,
+      including pull_request, merge_group, forks, and dispatches from other branches.
+    value: ${{ steps.compute.outputs.trusted }}
 runs:
   using: 'composite'
   steps:
@@ -27,13 +34,15 @@ runs:
       env:
         CANONICAL: ${{ inputs.canonical_registry }}
         SHA: ${{ github.sha }}
+        REF: ${{ github.ref }}
         EVENT_NAME: ${{ github.event_name }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         BASE_REPO: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         set -euo pipefail
         is_fork="false"
-        if [[ "$EVENT_NAME" == "pull_request" && -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+        if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "pull_request_target" ]] && [[ -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
           is_fork="true"
         fi
         if [[ "$is_fork" == "true" ]]; then
@@ -43,6 +52,17 @@ runs:
           registry="$CANONICAL"
           should_authenticate="true"
         fi
+
+        trusted="false"
+        case "$EVENT_NAME" in
+          push|schedule|workflow_dispatch)
+            if [[ -n "$DEFAULT_BRANCH" && "$REF" == "refs/heads/$DEFAULT_BRANCH" ]] || [[ "$REF" == refs/tags/* ]]; then
+              trusted="true"
+            fi
+            ;;
+        esac
+
         echo "is_fork=$is_fork" >> "$GITHUB_OUTPUT"
         echo "registry=$registry" >> "$GITHUB_OUTPUT"
         echo "should_authenticate=$should_authenticate" >> "$GITHUB_OUTPUT"
+        echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
