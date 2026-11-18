@@ -134,19 +134,26 @@ def norm_builders($n; $b):
           archs: ($b.apko.archs // null)
         }} else {} end);
 
+def norm_smoke($s):
+  if ($s | type) != "object" and ($s | type) != "null" then error("smoke must be an object") else null end
+  | {
+      commands: ($s.commands // []),
+      script: ($s.script // ""),
+      verify_version: ($s.verify_version // false)
+    };
+
 def norm_image($n):
   if type != "object" then error("image \($n) must be an object") else . end
   | . as $i
   | ($i.archs // ["amd64", "arm64"]) as $iarchs
+  | norm_smoke($i.smoke) as $ismoke
   | {
-      builders: (norm_builders($n; $i.builders) | with_entries(.value.archs = (.value.archs // $iarchs))),
+      builders: (norm_builders($n; $i.builders)
+        | with_entries(.value.archs = (.value.archs // $iarchs)
+            | .value.smoke = (if $i.builders[.key].smoke == null then $ismoke else norm_smoke($i.builders[.key].smoke) end))),
       archs: $iarchs,
       paths: ($i.paths // []),
-      smoke: {
-        commands: ($i.smoke.commands // []),
-        script: ($i.smoke.script // ""),
-        verify_version: ($i.smoke.verify_version // false)
-      }
+      smoke: $ismoke
     }
   | .primary = (
       if ($i.primary // null) != null then $i.primary
@@ -172,6 +179,9 @@ def validate_image($n; $pkgs):
       | .key]) as $bad_builders
   | if ($bad_builders | length) > 0
       then error("image \($n): builders.\($bad_builders[0]).archs must be a non-empty subset of amd64, arm64") else . end
+  | ([(.builders | to_entries[]) | select((.value.smoke.verify_version | type) != "boolean") | .key]) as $bad_smoke
+  | if ($bad_smoke | length) > 0
+      then error("image \($n): builders.\($bad_smoke[0]).smoke.verify_version must be boolean") else . end
   | if .builders.docker != null then
       (if is_one_of(.builders.docker.mode; ["build", "bake"]) | not
          then error("image \($n): docker.mode must be build or bake") else . end)
@@ -292,7 +302,8 @@ def runner_for($profile; $arch):
 
 def sanitize_ref: gsub("[^a-zA-Z0-9.]"; "-");
 def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
-def has_smoke($i): (($i.smoke.commands | length) > 0) or ($i.smoke.script != "");
+def has_smoke($s): (($s.commands | length) > 0) or ($s.script != "");
+def uniq_keep: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
 def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $i.primary == $b then "" else ($b + "-") end));
 def local_ref($id): "local/" + ($id | ascii_downcase) + ":smoke";
 def merge_args($hook; $args): ($hook + $args) | to_entries | map("\(.key)=\(.value)") | join("\n");
@@ -668,9 +679,9 @@ main() {
                     config: "",
                     needs_packages: "",
                     suffix: "",
-                    has_smoke: has_smoke($i),
-                    smoke_commands: ($i.smoke.commands | tojson),
-                    smoke_script: $i.smoke.script
+                    has_smoke: has_smoke($i.builders.docker.smoke),
+                    smoke_commands: ($i.builders.docker.smoke.commands | tojson),
+                    smoke_script: $i.builders.docker.smoke.script
                   }] else [] end)
               + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
@@ -691,9 +702,9 @@ main() {
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
                       suffix: $v.tag_suffix,
-                      has_smoke: ($v.tag_suffix == "" and has_smoke($i)),
-                      smoke_commands: (if $v.tag_suffix == "" then ($i.smoke.commands | tojson) else "[]" end),
-                      smoke_script: (if $v.tag_suffix == "" then $i.smoke.script else "" end)
+                      has_smoke: ($v.tag_suffix == "" and has_smoke($i.builders.apko.smoke)),
+                      smoke_commands: (if $v.tag_suffix == "" then ($i.builders.apko.smoke.commands | tojson) else "[]" end),
+                      smoke_script: (if $v.tag_suffix == "" then $i.builders.apko.smoke.script else "" end)
                     }
                 ] else [] end)
             ) | .[]
@@ -769,9 +780,8 @@ main() {
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | select(has_smoke($i))
-            | ([$i.archs[], ($i.builders.docker.archs // [])[], ($i.builders.apko.archs // [])[]] | unique)[] as $a
-            | ( (if $i.builders.docker and has_member($i.builders.docker.archs; $a) then [{
+            | ([$i.archs[], ($i.builders.docker.archs // [])[], ($i.builders.apko.archs // [])[]] | uniq_keep)[] as $a
+            | ( (if $i.builders.docker and has_smoke($i.builders.docker.smoke) and has_member($i.builders.docker.archs; $a) then [{
                     id: "\($n)-docker-\($a)",
                     image: $n,
                     builder: "docker",
@@ -779,11 +789,11 @@ main() {
                     runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                     registry: $m.registry,
                     final_artifact: "final-\($n)-docker",
-                    smoke_commands: ($i.smoke.commands | tojson),
-                    smoke_script: $i.smoke.script,
-                    expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end)
+                    smoke_commands: ($i.builders.docker.smoke.commands | tojson),
+                    smoke_script: $i.builders.docker.smoke.script,
+                    expected_version: (if $i.builders.docker.smoke.verify_version and $version != "" then $version else "" end)
                   }] else [] end)
-                + (if $i.builders.apko and has_member($i.builders.apko.archs; $a) then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
+                + (if $i.builders.apko and has_smoke($i.builders.apko.smoke) and has_member($i.builders.apko.archs; $a) then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
                     | {
                         id: "\($n)-apko-\($a)",
                         image: $n,
@@ -792,9 +802,9 @@ main() {
                         runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                         registry: $m.registry,
                         final_artifact: "final-\($n)-apko",
-                        smoke_commands: ($i.smoke.commands | tojson),
-                        smoke_script: $i.smoke.script,
-                        expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end)
+                        smoke_commands: ($i.builders.apko.smoke.commands | tojson),
+                        smoke_script: $i.builders.apko.smoke.script,
+                        expected_version: (if $i.builders.apko.smoke.verify_version and $version != "" then $version else "" end)
                       }
                   ] else [] end)
               ) | .[]

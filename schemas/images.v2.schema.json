@@ -310,6 +310,28 @@
             ]
           },
           "description": "Architectures this builder publishes. Overrides the image archs for this builder only. Defaults to the image archs. Untrusted runs build amd64 only."
+        },
+        "smoke": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Smoke test for this builder. Replaces the image smoke entirely for this builder. An empty object disables smoke for this builder.",
+          "properties": {
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Each string is split on whitespace into an entrypoint and arguments."
+            },
+            "script": {
+              "type": "string",
+              "description": "Repository script run with IMAGE and IMAGE_ARCH set."
+            },
+            "verify_version": {
+              "type": "boolean",
+              "description": "Require a command to print the release version on release tags."
+            }
+          }
         }
       }
     },
@@ -365,6 +387,28 @@
             ]
           },
           "description": "Architectures this builder publishes. Overrides the image archs for this builder only. Defaults to the image archs. Untrusted runs build amd64 only."
+        },
+        "smoke": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Smoke test for this builder. Replaces the image smoke entirely for this builder. An empty object disables smoke for this builder.",
+          "properties": {
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Each string is split on whitespace into an entrypoint and arguments."
+            },
+            "script": {
+              "type": "string",
+              "description": "Repository script run with IMAGE and IMAGE_ARCH set."
+            },
+            "verify_version": {
+              "type": "boolean",
+              "description": "Require a command to print the release version on release tags."
+            }
+          }
         }
       }
     }

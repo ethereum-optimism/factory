@@ -137,6 +137,7 @@ secrets and no OIDC token.
 - `context`, `dockerfile`, `target`, `build_args` (object), `bake_file`, `set` (bake variables as `KEY=VALUE` strings).
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
+- `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
 
 `apko`:
 
@@ -146,6 +147,7 @@ secrets and no OIDC token.
   tested. Without `configs`, `config` (default `apko/<image>.yaml`) is used.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
+- `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
 
 When an image has both builders, `primary` is required. Other image fields:
 
@@ -167,6 +169,22 @@ Docker on amd64 only, while apko already publishes amd64 and arm64:
   },
   "primary": "docker",
   "smoke": {"commands": ["widget --version"]}
+}
+```
+
+Smoke per builder: a builder's `smoke` replaces the image `smoke` entirely for
+that builder, with no merging of fields. Resolution: the builder's `smoke`, else
+the image `smoke`, else no smoke. An empty object (`{}` or `{"commands": []}`)
+disables smoke for that builder only. Example: the apko image puts `mytool` on
+PATH while the Dockerfile image ships `/bin/tool`:
+
+```json
+"widget": {
+  "builders": {
+    "docker": {"dockerfile": "Dockerfile", "smoke": {"commands": ["/bin/tool --version"]}},
+    "apko": {"config": "apko/widget.yaml", "smoke": {"commands": ["mytool --version"]}}
+  },
+  "primary": "docker"
 }
 ```
 
