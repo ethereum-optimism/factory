@@ -600,6 +600,62 @@ for change in '.images.both.builders.docker.archs = ["x86_64"]' '.images.both.bu
     || fail "missing builder archs error for: $change"
 done
 
+# --- Per-builder smoke ---------------------------------------------------------------
+
+# Each builder smokes its own binary: the untrusted build legs and the trusted smoke legs carry the builder's commands.
+dual_smoke="$TEST_DIR/dual-smoke.json"
+jq '.images.both.builders.docker.smoke = {"commands": ["/bin/tool --version"]}
+  | .images.both.builders.apko.smoke = {"commands": ["mytool --version"]}' "$dual" > "$dual_smoke"
+run_plan dual_smoke "$dual_smoke" TRUSTED=true
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .smoke_commands | fromjson | join(" ")] | unique | join(",")' '/bin/tool --version'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko") | .smoke_commands | fromjson | join(" ")] | unique | join(",")' 'mytool --version'
+assert_json "$(matrix smoke_matrix)" 'length' '4'
+run_plan dual_smoke_untrusted "$dual_smoke" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+  GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "docker") | .smoke_commands | fromjson | join(" ")] | unique | join(",")' '/bin/tool --version'
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "apko") | .smoke_commands | fromjson | join(" ")] | unique | join(",")' 'mytool --version'
+assert_json "$(matrix build_matrix)" '[.[] | select(.has_smoke == true) | .id] | sort | join(",")' 'both-apko,both-docker'
+
+# Builder-level smoke replaces the image smoke entirely: image verify_version is not inherited.
+verify_builder="$TEST_DIR/verify-builder.json"
+jq --argjson r "$(jq '.release' "$v2")" '. + {release: $r}
+  | .images.both.smoke.verify_version = true
+  | .images.both.builders.docker.smoke = {"commands": ["/bin/tool --version"]}' "$dual" > "$verify_builder"
+run_plan verify_builder "$verify_builder" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/both/v1.2.3 \
+  GITHUB_REF_NAME=both/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .expected_version] | unique | join(",")' ''
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko") | .expected_version] | unique | join(",")' 'v1.2.3'
+
+# An empty builder smoke disables smoke for that builder only, in either form.
+for empty in '{}' '{"commands": []}'; do
+  no_apko_smoke="$TEST_DIR/no-apko-smoke.json"
+  jq --argjson e "$empty" '.images.both.builders.apko.smoke = $e' "$dual" > "$no_apko_smoke"
+  run_plan no_apko_smoke "$no_apko_smoke" TRUSTED=true
+  assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko")] | length' '0'
+  assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .id] | sort | join(",")' 'both-docker-amd64,both-docker-arm64'
+  assert_eq "$(out_value "$OUT" has_smoke)" "true" "docker still smokes with empty apko smoke"
+  run_plan no_apko_smoke_untrusted "$no_apko_smoke" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+    GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+  assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "apko") | .has_smoke] | unique | join(",")' 'false'
+  assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "docker") | .has_smoke] | unique | join(",")' 'true'
+done
+
+# Without a builder override, the image smoke still applies to both builders.
+run_plan image_smoke "$dual" TRUSTED=true
+assert_json "$(matrix smoke_matrix)" '[.[] | .smoke_commands | fromjson | join(" ")] | unique | join(",")' '/bin/sh -c true'
+assert_json "$(matrix smoke_matrix)" 'length' '4'
+
+# A builder smoke that is not a boolean verify_version is rejected.
+bad_verify="$TEST_DIR/bad-verify.json"
+jq '.images.both.builders.apko.smoke = {"verify_version": "yes"}' "$dual" > "$bad_verify"
+if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bad-verify.out" GITHUB_EVENT_NAME=workflow_dispatch \
+    GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+    bash "$PLAN" "$bad_verify" > "$TEST_DIR/bad-verify.log" 2>&1; then
+  fail "planner accepted a non-boolean builder smoke verify_version"
+fi
+grep -q 'builders\.apko\.smoke\.verify_version must be boolean' "$TEST_DIR/bad-verify.log" \
+  || fail "missing builder smoke verify_version error"
+
 # --- Hook runs without Actions file commands -----------------------------------------
 
 hook_env_dir="$TEST_DIR/hook-env"
