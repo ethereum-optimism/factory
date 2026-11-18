@@ -84,6 +84,13 @@ elif name == "workflow_permissions":
 elif name == "secrets_in_result":
     mutate("          PLAN_RESULT: ${{ needs.plan.result }}\n",
            "          PLAN_RESULT: ${{ needs.plan.result }}\n          TOKEN: ${{ secrets.TOKEN }}\n")
+elif name == "checkout_order":
+    head = text.index("      - name: Checkout caller repository")
+    caller_end = text.index("\n      - name:", head + 1) + 1
+    caller_block = text[head:caller_end]
+    text = text[:head] + text[caller_end:]
+    verify = text.index("      - name: Verify factory checkout")
+    text = text[:verify] + caller_block + text[verify:]
 elif name == "selftest_caller_read_only":
     selftest = f"{root}/.github/workflows/build-images-selftest.yaml"
     text_st = open(selftest, encoding="utf-8").read()
@@ -118,6 +125,7 @@ expect_fail unpinned_uses "not pinned to a 40-hex SHA"
 expect_fail latest_in_action ":latest"
 expect_fail workflow_permissions "workflow-level permissions"
 expect_fail secrets_in_result "references secrets"
+expect_fail checkout_order "caller checkout must precede"
 expect_fail selftest_caller_read_only "must grant exactly"
 expect_fail privileged_without_trusted_if "unprivileged job must not declare an environment"
 

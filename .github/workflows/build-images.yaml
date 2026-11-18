@@ -44,6 +44,12 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}
@@ -73,12 +79,6 @@ jobs:
             echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
             exit 1
           fi
-
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
 
       - name: Compute trust
         id: trust
@@ -108,6 +108,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}
@@ -137,11 +142,6 @@ jobs:
             echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
             exit 1
           fi
-
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
 
       - name: Build package
         uses: ./.factory/actions/build-packages
@@ -178,6 +178,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}
@@ -207,11 +212,6 @@ jobs:
             echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
             exit 1
           fi
-
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
 
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
@@ -275,6 +275,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}
@@ -304,11 +309,6 @@ jobs:
             echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
             exit 1
           fi
-
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
 
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
@@ -419,6 +419,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}
@@ -448,11 +453,6 @@ jobs:
             echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
             exit 1
           fi
-
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0

@@ -145,6 +145,25 @@ def check_action_contents(root, names, errors):
                 errors.append(f"{rel}: contains a :latest image reference")
 
 
+def check_checkout_order(where, job, errors):
+    """A caller checkout (no path) must precede the factory checkout (path .factory).
+
+    Checking out the caller after factory cleans the untracked .factory directory.
+    """
+    caller_index = None
+    factory_index = None
+    for index, step in enumerate(job.get("steps") or []):
+        if not isinstance(step, dict) or not str(step.get("uses", "")).startswith("actions/checkout@"):
+            continue
+        path = (step.get("with") or {}).get("path")
+        if path == ".factory":
+            factory_index = index if factory_index is None else factory_index
+        elif path is None and caller_index is None:
+            caller_index = index
+    if factory_index is not None and caller_index is not None and caller_index > factory_index:
+        errors.append(f"{where}: caller checkout must precede the factory checkout")
+
+
 def check_job_workflow(root, path, errors):
     document = load_yaml(path)
     rel = os.path.relpath(path, root)
@@ -160,6 +179,7 @@ def check_job_workflow(root, path, errors):
             errors.append(f"{where}: job is not a mapping")
             continue
         job_nodes.append(job)
+        check_checkout_order(where, job, errors)
         permissions = job.get("permissions")
         environment = job.get("environment")
         condition = str(job.get("if", ""))
