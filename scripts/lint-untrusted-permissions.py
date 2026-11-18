@@ -190,10 +190,26 @@ def check_job_workflow(root, path, errors):
     return jobs
 
 
+SELFTEST_WORKFLOW = "build-images-selftest.yaml"
+SELFTEST_GRANT = {"contents": "read", "id-token": "write", "attestations": "write"}
+
+
+def check_selftest_caller(rel, document, errors):
+    for job_id, job in (document.get("jobs") or {}).items():
+        uses = job.get("uses", "") if isinstance(job, dict) else ""
+        if uses.endswith("build-images.yaml"):
+            if job.get("permissions") != SELFTEST_GRANT:
+                errors.append(f"{rel} job {job_id}: caller must grant exactly {SELFTEST_GRANT}, found {job.get('permissions')}")
+            return
+    errors.append(f"{rel}: no job calls build-images.yaml")
+
+
 def check_other_workflow(root, path, errors):
     rel = os.path.relpath(path, root)
     document = load_yaml(path)
     walk_uses(document, rel, errors)
+    if os.path.basename(path) == SELFTEST_WORKFLOW:
+        check_selftest_caller(rel, document, errors)
     with open(path, encoding="utf-8") as handle:
         if ":latest" in handle.read():
             errors.append(f"{rel}: contains a :latest image reference")

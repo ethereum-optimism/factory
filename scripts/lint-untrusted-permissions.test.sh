@@ -84,6 +84,11 @@ elif name == "workflow_permissions":
 elif name == "secrets_in_result":
     mutate("          PLAN_RESULT: ${{ needs.plan.result }}\n",
            "          PLAN_RESULT: ${{ needs.plan.result }}\n          TOKEN: ${{ secrets.TOKEN }}\n")
+elif name == "selftest_caller_read_only":
+    selftest = f"{root}/.github/workflows/build-images-selftest.yaml"
+    text_st = open(selftest, encoding="utf-8").read()
+    text_st = text_st.replace("      id-token: write\n      attestations: write\n", "", 1)
+    open(selftest, "w", encoding="utf-8").write(text_st)
 elif name == "privileged_without_trusted_if":
     mutate("    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_manifest == 'true' && needs.publish.result == 'success' }}",
            "    if: ${{ always() && needs.plan.outputs.has_manifest == 'true' }}")
@@ -113,6 +118,7 @@ expect_fail unpinned_uses "not pinned to a 40-hex SHA"
 expect_fail latest_in_action ":latest"
 expect_fail workflow_permissions "workflow-level permissions"
 expect_fail secrets_in_result "references secrets"
+expect_fail selftest_caller_read_only "must grant exactly"
 expect_fail privileged_without_trusted_if "unprivileged job must not declare an environment"
 
 echo "lint self-tests passed"

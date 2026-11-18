@@ -28,6 +28,8 @@ jobs:
     name: build-images (untrusted path)
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-images.yaml
     with:
       config: test/fixtures/images.json
