@@ -122,22 +122,25 @@ def norm_builders($n; $b):
           build_args: ($b.docker.build_args | kv_obj),
           bake_file: ($b.docker.bake_file // "docker-bake.hcl"),
           set: ($b.docker.set | lines_arr),
-          tag_prefix: ($b.docker.tag_prefix // null)
+          tag_prefix: ($b.docker.tag_prefix // null),
+          archs: ($b.docker.archs // null)
         }} else {} end)
     + (if $b.apko then {apko: {
           needs_packages: ($b.apko.needs_packages // []),
           tag_prefix: ($b.apko.tag_prefix // null),
           configs: (if ($b.apko.configs // null) != null then
                       [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // "")}]
-                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end)
+                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end),
+          archs: ($b.apko.archs // null)
         }} else {} end);
 
 def norm_image($n):
   if type != "object" then error("image \($n) must be an object") else . end
   | . as $i
+  | ($i.archs // ["amd64", "arm64"]) as $iarchs
   | {
-      builders: norm_builders($n; $i.builders),
-      archs: ($i.archs // ["amd64", "arm64"]),
+      builders: (norm_builders($n; $i.builders) | with_entries(.value.archs = (.value.archs // $iarchs))),
+      archs: $iarchs,
       paths: ($i.paths // []),
       smoke: {
         commands: ($i.smoke.commands // []),
@@ -164,6 +167,11 @@ def validate_image($n; $pkgs):
       then error("image \($n): builders tag_prefix may only contain letters, digits, dot, dash") else . end
   | if ($i.archs | length) == 0 or ([$i.archs[] | select(is_one_of(.; ["amd64", "arm64"]) | not)] | length) > 0
       then error("image \($n): archs must be a non-empty subset of amd64, arm64") else . end
+  | ([(.builders | to_entries[])
+      | select((.value.archs | length) == 0 or ([.value.archs[] | select(is_one_of(.; ["amd64", "arm64"]) | not)] | length) > 0)
+      | .key]) as $bad_builders
+  | if ($bad_builders | length) > 0
+      then error("image \($n): builders.\($bad_builders[0]).archs must be a non-empty subset of amd64, arm64") else . end
   | if .builders.docker != null then
       (if is_one_of(.builders.docker.mode; ["build", "bake"]) | not
          then error("image \($n): docker.mode must be build or bake") else . end)
@@ -587,8 +595,13 @@ main() {
   if [[ "$TRUSTED" != "true" ]]; then
     local skipped_name
     for skipped_name in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
-      if ! jq -e --arg n "$skipped_name" 'any(.images[$n].archs[]; . == "amd64")' "$MODEL" >/dev/null; then
+      if ! jq -e --arg n "$skipped_name" 'any(.images[$n].builders[].archs[]; . == "amd64")' "$MODEL" >/dev/null; then
         echo "::notice::Image $skipped_name has no amd64 architecture; skipped on this untrusted run"
+      else
+        while read -r skipped_builder; do
+          [[ -n "$skipped_builder" ]] || continue
+          echo "::notice::Image $skipped_name builder $skipped_builder has no amd64 architecture; skipped on this untrusted run"
+        done < <(jq -r --arg n "$skipped_name" '.images[$n].builders | to_entries[] | select(.value.archs | index("amd64") | not) | .key' "$MODEL")
       fi
     done
   fi
@@ -638,8 +651,7 @@ main() {
       | ([ if $trusted then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | select(has_member($i.archs; "amd64"))
-            | ( (if $i.builders.docker then [{
+            | ( (if $i.builders.docker and has_member($i.builders.docker.archs; "amd64") then [{
                     id: "\($n)-docker",
                     image: $n,
                     builder: "docker",
@@ -660,7 +672,7 @@ main() {
                     smoke_commands: ($i.smoke.commands | tojson),
                     smoke_script: $i.smoke.script
                   }] else [] end)
-              + (if $i.builders.apko then [ $i.builders.apko.configs[] as $v
+              + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
                   | {
                       id: "\($n)-apko\($sfx)",
@@ -690,8 +702,7 @@ main() {
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | $i.archs as $archs
-            | ( (if $i.builders.docker then [ $archs[] as $a | {
+            | ( (if $i.builders.docker then [ $i.builders.docker.archs[] as $a | {
                     id: "\($n)-docker-\($a)",
                     image: $n,
                     builder: "docker",
@@ -720,7 +731,7 @@ main() {
                       builder: "apko",
                       kind: "apko",
                       arch: "",
-                      archs: ($archs | join(",")),
+                      archs: ($i.builders.apko.archs | join(",")),
                       runner: "ubuntu-24.04",
                       mode: "",
                       context: "",
@@ -743,7 +754,7 @@ main() {
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | select($i.builders.docker != null and ($i.archs | length) > 0)
+            | select($i.builders.docker != null and ($i.builders.docker.archs | length) > 0)
             | {
                 id: "\($n)-docker",
                 image: $n,
@@ -759,8 +770,8 @@ main() {
             $images[] as $n
             | $m.images[$n] as $i
             | select(has_smoke($i))
-            | $i.archs[] as $a
-            | ( (if $i.builders.docker then [{
+            | ([$i.archs[], ($i.builders.docker.archs // [])[], ($i.builders.apko.archs // [])[]] | unique)[] as $a
+            | ( (if $i.builders.docker and has_member($i.builders.docker.archs; $a) then [{
                     id: "\($n)-docker-\($a)",
                     image: $n,
                     builder: "docker",
@@ -772,7 +783,7 @@ main() {
                     smoke_script: $i.smoke.script,
                     expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end)
                   }] else [] end)
-                + (if $i.builders.apko then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
+                + (if $i.builders.apko and has_member($i.builders.apko.archs; $a) then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
                     | {
                         id: "\($n)-apko-\($a)",
                         image: $n,

@@ -534,6 +534,72 @@ grep -q '^::notice::Image widget has no amd64 architecture' "$TEST_DIR/untrusted
 grep -q "^::notice::Release tag 'not-a-release' does not match" "$TEST_DIR/invalid_tag.log" \
   || fail "missing unknown tag notice"
 
+# --- Per-builder archs -----------------------------------------------------------------
+
+# Docker publishes amd64 only while apko publishes amd64 and arm64.
+dual_archs="$TEST_DIR/dual-archs.json"
+jq '.images.both.builders.docker.archs = ["amd64"]' "$dual" > "$dual_archs"
+run_plan dual_archs "$dual_archs" TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker")] | length' '1'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'amd64'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .sha_tag] | unique | join(",")' "$SHA"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .archs] | join(",")' 'amd64,arm64'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .sha_tag] | join(",")' "apko-$SHA"
+assert_json "$(matrix manifest_matrix)" 'length' '1'
+assert_json "$(matrix manifest_matrix)" '.[0].sha_tag' "$SHA"
+assert_json "$(matrix manifest_matrix)" '.[0].pushed_pattern' 'pushed-both-docker-*'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .id] | join(",")' 'both-docker-amd64'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko") | .id] | sort | join(",")' 'both-apko-amd64,both-apko-arm64'
+assert_json "$(matrix smoke_matrix)" 'length' '3'
+
+# A single-arch docker builder keeps the same manifest and attestation path as an image-level single arch.
+single_image="$TEST_DIR/single-image.json"
+jq '.images.both.archs = ["amd64"] | del(.images.both.builders.docker.archs)' "$dual" > "$single_image"
+run_plan single_image "$single_image" TRUSTED=true
+assert_json "$(matrix manifest_matrix)" '.[0].id' 'both-docker'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'amd64'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .id] | join(",")' 'both-docker-amd64'
+
+# Builder-level archs override the image-level archs; the other builder inherits them.
+override="$TEST_DIR/override.json"
+jq '.images.both.archs = ["arm64"] | .images.both.builders.apko.archs = ["amd64"]' "$dual" > "$override"
+run_plan override "$override" TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'arm64'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .archs] | join(",")' 'amd64'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko") | .arch] | join(",")' 'amd64'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'arm64'
+
+# Untrusted runs build amd64 per builder: the docker builder is skipped when its archs exclude amd64.
+run_plan untrusted_dual "$dual_archs" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+  GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'amd64'
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "apko") | .arch] | join(",")' 'amd64'
+for key in publish_matrix manifest_matrix smoke_matrix; do
+  assert_json "$(matrix $key)" 'length' '0'
+done
+
+arm_docker="$TEST_DIR/arm-docker.json"
+jq '.images.both.builders.docker.archs = ["arm64"]' "$dual" > "$arm_docker"
+run_plan untrusted_arm_docker "$arm_docker" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+  GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "docker") | .id] | length' '0'
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "apko") | .arch] | join(",")' 'amd64'
+grep -q '^::notice::Image both builder docker has no amd64 architecture; skipped on this untrusted run' \
+  "$TEST_DIR/untrusted_arm_docker.log" || fail "missing untrusted builder skip notice"
+
+# Invalid builder archs are rejected.
+for change in '.images.both.builders.docker.archs = ["x86_64"]' '.images.both.builders.apko.archs = []'; do
+  jq "$change" "$dual" > "$TEST_DIR/bad-builder-archs.json"
+  : > "$TEST_DIR/bad-builder-archs.out"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bad-builder-archs.out" GITHUB_EVENT_NAME=workflow_dispatch \
+      GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/bad-builder-archs.json" > "$TEST_DIR/bad-builder-archs.log" 2>&1; then
+    fail "planner accepted invalid builder archs: $change"
+  fi
+  grep -q 'builders\..*\.archs must be a non-empty subset' "$TEST_DIR/bad-builder-archs.log" \
+    || fail "missing builder archs error for: $change"
+done
+
 # --- Hook runs without Actions file commands -----------------------------------------
 
 hook_env_dir="$TEST_DIR/hook-env"

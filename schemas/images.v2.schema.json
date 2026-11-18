@@ -298,6 +298,18 @@
           "type": "string",
           "pattern": "^[a-zA-Z0-9.-]*$",
           "description": "Tag prefix for this builder. Overrides the default: empty for the primary builder, the builder name and a dash for the secondary builder. The top-level tag_prefix is still prepended."
+        },
+        "archs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "amd64",
+              "arm64"
+            ]
+          },
+          "description": "Architectures this builder publishes. Overrides the image archs for this builder only. Defaults to the image archs. Untrusted runs build amd64 only."
         }
       }
     },
@@ -341,6 +353,18 @@
           "type": "string",
           "pattern": "^[a-zA-Z0-9.-]*$",
           "description": "Tag prefix for this builder. Overrides the default: empty for the primary builder, the builder name and a dash for the secondary builder. The top-level tag_prefix is still prepended."
+        },
+        "archs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "amd64",
+              "arm64"
+            ]
+          },
+          "description": "Architectures this builder publishes. Overrides the image archs for this builder only. Defaults to the image archs. Untrusted runs build amd64 only."
         }
       }
     }

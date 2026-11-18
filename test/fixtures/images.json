@@ -41,7 +41,10 @@
       "builders": {
         "docker": {
           "context": "test/fixtures/docker",
-          "dockerfile": "Dockerfile"
+          "dockerfile": "Dockerfile",
+          "archs": [
+            "amd64"
+          ]
         },
         "apko": {
           "config": "test/fixtures/apko/tiny.yaml"

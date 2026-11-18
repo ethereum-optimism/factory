@@ -136,6 +136,7 @@ secrets and no OIDC token.
 - `mode`: `build` (Dockerfile, default) or `bake` (bake file).
 - `context`, `dockerfile`, `target`, `build_args` (object), `bake_file`, `set` (bake variables as `KEY=VALUE` strings).
 - `tag_prefix`: see Tags.
+- `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 
 `apko`:
 
@@ -144,14 +145,30 @@ secrets and no OIDC token.
   `tag_suffix` is the default variant. Only the default variant is smoke
   tested. Without `configs`, `config` (default `apko/<image>.yaml`) is used.
 - `tag_prefix`: see Tags.
+- `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 
 When an image has both builders, `primary` is required. Other image fields:
 
-- `archs`: `amd64`, `arm64`. Defaults to both. Untrusted runs build `amd64` only.
+- `archs`: `amd64`, `arm64`. Defaults to both. Each builder uses its own `archs` when set, otherwise these. Untrusted runs build `amd64` only.
 - `paths`: changed-file patterns for pull requests and pushes.
 - `smoke`: `commands` (each string split on whitespace into entrypoint and
   arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
   `verify_version` (on release tags, a command must print the version).
+
+Resolution order for each builder's architectures: the builder's `archs`, then
+the image `archs`, then both architectures. Example: an image still built with
+Docker on amd64 only, while apko already publishes amd64 and arm64:
+
+```json
+"widget": {
+  "builders": {
+    "docker": {"dockerfile": "Dockerfile", "archs": ["amd64"]},
+    "apko": {"config": "apko/widget.yaml"}
+  },
+  "primary": "docker",
+  "smoke": {"commands": ["widget --version"]}
+}
+```
 
 ## Tags
 
