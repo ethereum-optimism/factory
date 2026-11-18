@@ -47,7 +47,9 @@ runs:
         fi
 
         pulled_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
-        if [ "$pulled_arch" != "$IMAGE_ARCH" ]; then
+        if [ -z "$pulled_arch" ]; then
+          echo "::notice::docker reports no architecture for $IMAGE; the platform is enforced by docker run --platform"
+        elif [ "$pulled_arch" != "$IMAGE_ARCH" ]; then
           echo "FAIL: $IMAGE is $pulled_arch but the test architecture is $IMAGE_ARCH" >&2
           exit 1
         fi

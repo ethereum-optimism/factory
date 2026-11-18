@@ -5,7 +5,6 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PLAN="$SCRIPT_DIR/plan-images.sh"
 TEST_DIR=$(mktemp -d)
-trap 'rm -rf "$TEST_DIR"' EXIT
 
 SHA=0123456789abcdef0123456789abcdef01234567
 DEFAULT_ENV=(
@@ -145,6 +144,7 @@ JSON
 write_legacy_apko() {
   cat > "$1" <<'JSON'
 {
+  "registry": "registry.example.invalid/images",
   "melange_archs": ["x86_64"],
   "apko_archs": "amd64",
   "release": {
@@ -195,9 +195,9 @@ assert_json "$release_build" 'length' '0'
 release_pub=$(matrix publish_matrix)
 assert_json "$release_pub" 'length' '2'
 assert_json "$release_pub" '[.[].image] | unique | join(",")' 'widget'
-assert_json "$release_pub" '[.[].expected_version] | unique | join(",")' 'v1.2.3'
+assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' 'v1.2.3'
 assert_json "$release_pub" '[.[].ref_tag] | unique | join(",")' 'v1.2.3'
-assert_json "$(matrix smoke_arm64_matrix)" '.[0].expected_version' 'v1.2.3'
+assert_json "$(matrix smoke_matrix)" '.[0].expected_version' 'v1.2.3'
 assert_json "$(matrix packages_matrix)" 'length' '0'
 assert_eq "$(matrix selected_images)" "widget" "release selects only the tagged image"
 
@@ -206,9 +206,8 @@ run_plan release_gadget "$v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/gadget
   GITHUB_REF_NAME=gadget/v3.0.0 GITHUB_REF_TYPE=tag TRUSTED=true
 gadget_pub=$(matrix publish_matrix)
 assert_json "$gadget_pub" 'length' '2'
-assert_json "$gadget_pub" '[.[] | select(.suffix == "")][0].expected_version' 'v3.0.0'
-assert_json "$gadget_pub" '[.[] | select(.suffix == "-dev")][0].expected_version' ''
-assert_json "$gadget_pub" '[.[] | select(.suffix == "-dev")][0].smoke_commands' '[]'
+assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' 'v3.0.0'
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64,gadget-apko-arm64'
 assert_json "$gadget_pub" '[.[] | select(.suffix == "")][0].sha_tag' "$SHA"
 assert_json "$gadget_pub" '[.[] | select(.suffix == "-dev")][0].sha_tag' "$SHA-dev"
 assert_json "$(matrix packages_matrix)" 'length' '1'
@@ -218,7 +217,7 @@ assert_json "$(matrix packages_matrix)" '.[0].build_version' 'v3.0.0'
 run_plan invalid_tag "$v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/not-a-release \
   GITHUB_REF_NAME=not-a-release GITHUB_REF_TYPE=tag TRUSTED=true
 assert_eq "$(out_value "$OUT" is_release)" "true" "invalid tag is_release"
-for key in packages_matrix build_matrix publish_matrix manifest_matrix smoke_arm64_matrix; do
+for key in packages_matrix build_matrix publish_matrix manifest_matrix smoke_matrix; do
   assert_json "$(matrix $key)" 'length' '0'
 done
 assert_eq "$(out_value "$OUT" has_publish)" "false" "invalid tag has_publish"
@@ -235,17 +234,17 @@ assert_eq "$(out_value "$OUT" is_release)" "false" "dispatch is_release"
 assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "dispatch full image set"
 assert_json "$(matrix packages_matrix)" '.[0].build_version' ''
 assert_json "$(matrix packages_matrix)" '.[0].runner' 'ubuntu-24.04'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .expected_version] | unique | join(",")' ''
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker" and .arch == "amd64") | .runner] | join(",")' 'ubuntu-24.04'
-assert_json "$(matrix smoke_arm64_matrix)" '[.[] | select(.builder == "docker") | .runner] | join(",")' 'ubuntu-24.04-arm'
-assert_json "$(matrix smoke_arm64_matrix)" '[.[] | select(.builder == "docker") | .final_artifact] | join(",")' 'final-widget-docker'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.arch == "arm64") | .runner] | unique | join(",")' 'ubuntu-24.04-arm'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.arch == "amd64") | .runner] | unique | join(",")' 'ubuntu-24.04'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "docker") | .final_artifact] | unique | join(",")' 'final-widget-docker'
 
 # --- Untrusted plan ------------------------------------------------------------
 
 run_plan untrusted "$v2" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
   GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
 assert_eq "$(out_value "$OUT" trusted)" "false" "untrusted trusted flag"
-for key in publish_matrix manifest_matrix smoke_arm64_matrix; do
+for key in publish_matrix manifest_matrix smoke_matrix; do
   assert_json "$(matrix $key)" 'length' '0'
 done
 assert_json "$(matrix packages_matrix)" '[.[].arch] | unique | join(",")' 'x86_64'
@@ -295,12 +294,13 @@ assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .s
 assert_json "$(matrix manifest_matrix)" '.[0].sha_tag' "$SHA"
 assert_json "$(matrix manifest_matrix)" 'length' '1'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'amd64,arm64'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.arch == "arm64") | .runner] | join(",")' 'ubuntu-24.04-arm'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.arch == "amd64" and .builder == "docker") | .smoke_local] | join(",")' 'true'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.arch == "arm64") | .smoke_local] | join(",")' 'false'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.arch == "arm64") | .runner] | unique | join(",")' 'ubuntu-24.04-arm'
+assert_json "$(matrix publish_matrix)" '[.[] | has("smoke_local") or has("smoke_commands")] | any' 'false'
+assert_eq "$(out_value "$OUT" has_smoke)" "true" "dual has_smoke"
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .archs] | join(",")' 'amd64,arm64'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .needs_packages] | join(",")' 'stack'
-assert_json "$(matrix smoke_arm64_matrix)" 'length' '2'
+assert_json "$(matrix smoke_matrix)" 'length' '4'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.builder == "apko") | .id] | sort | join(",")' 'both-apko-amd64,both-apko-arm64'
 
 # Secondary builder in a dual image gets the builder-prefixed tags.
 dual_apko_first="$TEST_DIR/dual-apko-first.json"
@@ -332,9 +332,8 @@ assert_eq "$(out_value "$OUT" selected_images)" "dockonly,gadget,widget" "legacy
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .image] | unique | join(",")' 'dockonly'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .build_args] | unique | join(",")' 'ENVIRONMENT=staging'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .target] | unique | join(",")' 'app'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "gadget" and .suffix == "-dev") | .sha_tag] | join(",")' "$SHA-dev"
-assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "gadget" and .suffix == "") | .smoke_commands] | join(",")' '["gadget --version"]'
-assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "gadget" and .suffix == "-dev") | .smoke_commands] | join(",")' '[]'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "gadget" and .suffix == "-dev") | .sha_tag] | join(",")' "apko-$SHA-dev"
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.image == "gadget") | .smoke_commands] | unique | join(",")' '["gadget --version"]'
 assert_json "$(matrix packages_matrix)" '[.[].package] | unique | join(",")' 'stack'
 assert_json "$(matrix packages_matrix)" '[.[].arch] | join(",")' 'x86_64'
 
@@ -350,11 +349,11 @@ popd >/dev/null
 legacy_pub=$(matrix publish_matrix)
 assert_json "$legacy_pub" 'length' '2'
 assert_json "$legacy_pub" '[.[].image] | unique | join(",")' 'gadget'
-assert_json "$legacy_pub" '[.[] | select(.suffix == "")][0].expected_version' 'v3.0.0'
-assert_json "$legacy_pub" '[.[] | select(.suffix == "-dev")][0].smoke_commands' '[]'
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64'
 assert_json "$(matrix packages_matrix)" 'length' '1'
 # The legacy fixture builds amd64 only, so no arm64 smoke leg is planned.
-assert_json "$(matrix smoke_arm64_matrix)" 'length' '0'
+assert_json "$(matrix smoke_matrix)" 'length' '1'
+assert_json "$(matrix smoke_matrix)" '.[0].arch' 'amd64'
 
 # Legacy docker catalogs with a same-name apko entry become dual-builder images.
 legacy_dual_dir="$TEST_DIR/legacy-dual"
@@ -479,5 +478,74 @@ assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "catalog change 
 pr_change unrelated docs/readme.md
 assert_eq "$(out_value "$OUT" selected_images)" "" "unrelated change selects nothing"
 assert_json "$(matrix build_matrix)" 'length' '0'
+
+# --- Release ref tag matches the legacy sanitized ref name ----------------------
+
+default_release="$TEST_DIR/default-release.json"
+jq 'del(.release.publish_tag)' "$v2" > "$default_release"
+run_plan default_release "$default_release" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+legacy_ref_tag=$(printf '%s' "widget/v1.2.3" | sed 's/[^a-zA-Z0-9.]/-/g')
+assert_eq "$legacy_ref_tag" "widget-v1.2.3" "legacy sanitize formula"
+assert_json "$(matrix publish_matrix)" '[.[].ref_tag] | unique | join(",")' "$legacy_ref_tag"
+
+# --- Builder tag_prefix overrides ----------------------------------------------
+
+apko_only="$TEST_DIR/apko-only.json"
+jq '.images = {"gadget": {"builders": {"apko": {"config": "apko/gadget.yaml", "tag_prefix": "apko-", "needs_packages": ["stack"]}}, "paths": ["gadget/**"]}}' "$v2" > "$apko_only"
+run_plan apko_only_prefix "$apko_only" TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0].sha_tag' "apko-$SHA"
+assert_json "$(matrix publish_matrix)" '.[0].ref_tag' "apko-main"
+
+bad_builder_prefix="$TEST_DIR/bad-builder-prefix.json"
+jq '.images.widget.builders.docker.tag_prefix = "bad_prefix!"' "$v2" > "$bad_builder_prefix"
+if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bbp.out" GITHUB_EVENT_NAME=workflow_dispatch \
+    GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+    bash "$PLAN" "$bad_builder_prefix" > "$TEST_DIR/bbp.log" 2>&1; then
+  fail "invalid builder tag_prefix was accepted"
+fi
+
+# --- Legacy apko tag prefix depends on the docker catalog -----------------------
+
+apko_only_dir="$TEST_DIR/legacy-apko-without-docker"
+mkdir -p "$apko_only_dir/.github"
+pushd "$apko_only_dir" >/dev/null
+write_legacy_apko .github/images.apko.json
+run_plan legacy_apko_no_docker .github/images.json TRUSTED=true
+popd >/dev/null
+assert_json "$(matrix publish_matrix)" '[.[] | select(.suffix == "")][0].sha_tag' "$SHA"
+
+# --- Name validation ----------------------------------------------------------------
+
+bad_package="$TEST_DIR/bad-package.json"
+jq '.packages.Bad_Name = {"config": "melange/x.yaml"}' "$dual" > "$bad_package"
+if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bp.out" GITHUB_EVENT_NAME=workflow_dispatch \
+    GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+    bash "$PLAN" "$bad_package" > "$TEST_DIR/bp.log" 2>&1; then
+  fail "invalid package name was accepted"
+fi
+
+# --- Untrusted runners and notices ----------------------------------------------------
+
+run_plan untrusted_large "$large" TRUSTED=false
+assert_json "$(matrix packages_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
+grep -q '^::notice::Image widget has no amd64 architecture' "$TEST_DIR/untrusted_arm.log" \
+  || fail "missing untrusted skip notice"
+grep -q "^::notice::Release tag 'not-a-release' does not match" "$TEST_DIR/invalid_tag.log" \
+  || fail "missing unknown tag notice"
+
+# --- Hook runs without Actions file commands -----------------------------------------
+
+hook_env_dir="$TEST_DIR/hook-env"
+mkdir -p "$hook_env_dir/scripts"
+cat > "$hook_env_dir/scripts/env-hook.sh" <<'SH'
+#!/usr/bin/env bash
+echo "HOOK_ENV_SEEN=${GITHUB_ENV:-unset}"
+SH
+jq '.hooks = {"pre_build": "scripts/env-hook.sh"}' "$dual" > "$hook_env_dir/catalog.json"
+pushd "$hook_env_dir" >/dev/null
+run_plan hook_env catalog.json TRUSTED=true GITHUB_ENV="$TEST_DIR/github-env-file"
+popd >/dev/null
+assert_json "$(matrix packages_matrix)" '.[0].build_env' 'HOOK_ENV_SEEN=unset'
 
 echo "plan-images tests passed"

@@ -42,7 +42,7 @@ runs:
       run: |
         set -euo pipefail
         is_fork="false"
-        if [[ "$EVENT_NAME" == "pull_request" && -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+        if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "pull_request_target" ]] && [[ -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
           is_fork="true"
         fi
         if [[ "$is_fork" == "true" ]]; then

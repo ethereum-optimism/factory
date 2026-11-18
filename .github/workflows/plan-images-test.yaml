@@ -5,6 +5,8 @@ on:
     paths:
       - actions/plan-images/**
       - actions/fork-context/**
+      - scripts/lint-untrusted-permissions*
+      - .github/workflows/build-images*.yaml
       - .github/workflows/plan-images-test.yaml
   push:
     branches:
@@ -12,6 +14,8 @@ on:
     paths:
       - actions/plan-images/**
       - actions/fork-context/**
+      - scripts/lint-untrusted-permissions*
+      - .github/workflows/build-images*.yaml
       - .github/workflows/plan-images-test.yaml
 
 permissions:
@@ -29,3 +33,6 @@ jobs:
 
       - name: Test plan-images
         run: actions/plan-images/plan-images.test.sh
+
+      - name: Lint self-tests
+        run: scripts/lint-untrusted-permissions.test.sh

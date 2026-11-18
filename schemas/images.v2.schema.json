@@ -4,7 +4,10 @@
   "title": "Factory images catalog (version 2)",
   "description": "Catalog read by .github/workflows/build-images.yaml. Keep it at .github/images.json in the repository that owns the images.",
   "type": "object",
-  "required": ["version", "images"],
+  "required": [
+    "version",
+    "images"
+  ],
   "additionalProperties": false,
   "properties": {
     "version": {
@@ -22,25 +25,45 @@
     "release": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Release tag mapping. Defaults: tag_regex ^([^/]+)/(v.+)$, service_match 1, version_match 2, publish_tag ${version}, source_ref ${ref_name}.",
+      "description": "Release tag mapping. Defaults: tag_regex ^([^/]+)/(v.+)$, service_match 1, version_match 2, publish_tag ${ref_name}, source_ref ${ref_name}.",
       "properties": {
-        "tag_regex": {"type": "string"},
-        "service_match": {"type": "integer", "minimum": 0},
-        "version_match": {"type": "integer", "minimum": 0},
-        "service": {"type": "string", "description": "Optional template rendered from the captures; supports ${service}, ${version}, ${ref_name}."},
-        "publish_tag": {"type": "string"},
-        "source_ref": {"type": "string"}
+        "tag_regex": {
+          "type": "string"
+        },
+        "service_match": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "version_match": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "service": {
+          "type": "string",
+          "description": "Optional template rendered from the captures; supports ${service}, ${version}, ${ref_name}."
+        },
+        "publish_tag": {
+          "type": "string",
+          "description": "Rendered publish tag. Defaults to ${ref_name}, the sanitized full ref name (for example svc-v1.2.3 for svc/v1.2.3)."
+        },
+        "source_ref": {
+          "type": "string"
+        }
       }
     },
     "shared_paths": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Changed-file patterns that plan every image and package. A pattern ending in /** matches everything below that directory."
     },
     "packages": {
       "type": "object",
       "description": "Melange packages, keyed by name. Images reference them through builders.apko.needs_packages.",
-      "additionalProperties": {"$ref": "#/$defs/package"}
+      "additionalProperties": {
+        "$ref": "#/$defs/package"
+      }
     },
     "hooks": {
       "type": "object",
@@ -54,8 +77,12 @@
     },
     "images": {
       "type": "object",
-      "propertyNames": {"pattern": "^[a-z0-9][a-z0-9._-]*$"},
-      "additionalProperties": {"$ref": "#/$defs/image"}
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9._-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/image"
+      }
     }
   },
   "$defs": {
@@ -63,68 +90,130 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "config": {"type": "string", "description": "Melange configuration path. Defaults to melange/<name>.yaml."},
-        "runner_profile": {"enum": ["standard", "large"], "description": "Runner profile per architecture. Defaults to standard."},
+        "config": {
+          "type": "string",
+          "description": "Melange configuration path. Defaults to melange/<name>.yaml."
+        },
+        "runner_profile": {
+          "enum": [
+            "standard",
+            "large"
+          ],
+          "description": "Runner profile per architecture. Defaults to standard."
+        },
         "source": {
           "type": "object",
           "additionalProperties": false,
           "description": "Source repository checked out before the build. path must be a subdirectory, not '.'.",
           "properties": {
-            "repository": {"type": "string", "description": "owner/name. Defaults to the calling repository."},
-            "ref": {"type": "string"},
-            "path": {"type": "string", "not": {"const": "."}}
+            "repository": {
+              "type": "string",
+              "description": "owner/name. Defaults to the calling repository."
+            },
+            "ref": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string",
+              "not": {
+                "const": "."
+              }
+            }
           }
         },
-        "source_submodules": {"enum": ["false", "true", "recursive"]},
-        "use_gha_cache": {"type": "boolean"},
-        "cache_key_files": {"type": "array", "items": {"type": "string"}},
+        "source_submodules": {
+          "enum": [
+            "false",
+            "true",
+            "recursive"
+          ]
+        },
+        "use_gha_cache": {
+          "type": "boolean"
+        },
+        "cache_key_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "archs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["x86_64", "aarch64"]},
+          "items": {
+            "enum": [
+              "x86_64",
+              "aarch64"
+            ]
+          },
           "description": "Melange architectures. Untrusted runs build x86_64 only."
         },
         "cargo_profile": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "trusted": {"type": "string"},
-            "untrusted": {"type": "string"}
+            "trusted": {
+              "type": "string"
+            },
+            "untrusted": {
+              "type": "string"
+            }
           }
         },
-        "build_env": {"type": "string", "description": "KEY=VALUE lines added to the melange environment."},
-        "build_version": {"type": "string"}
+        "build_env": {
+          "type": "string",
+          "description": "KEY=VALUE lines added to the melange environment."
+        },
+        "build_version": {
+          "type": "string"
+        }
       }
     },
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["builders"],
+      "required": [
+        "builders"
+      ],
       "properties": {
         "builders": {
           "type": "object",
           "minProperties": 1,
           "additionalProperties": false,
           "properties": {
-            "docker": {"$ref": "#/$defs/docker"},
-            "apko": {"$ref": "#/$defs/apko"}
+            "docker": {
+              "$ref": "#/$defs/docker"
+            },
+            "apko": {
+              "$ref": "#/$defs/apko"
+            }
           }
         },
         "primary": {
-          "enum": ["docker", "apko"],
+          "enum": [
+            "docker",
+            "apko"
+          ],
           "description": "Builder that gets the canonical tags. Required when both builders are set. The other builder's tags are prefixed with its name and a dash."
         },
         "archs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["amd64", "arm64"]},
+          "items": {
+            "enum": [
+              "amd64",
+              "arm64"
+            ]
+          },
           "description": "Defaults to amd64 and arm64. Untrusted runs build amd64 only."
         },
         "paths": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Changed-file patterns that plan this image on pull_request and push."
         },
         "smoke": {
@@ -133,39 +222,82 @@
           "properties": {
             "commands": {
               "type": "array",
-              "items": {"type": "string"},
+              "items": {
+                "type": "string"
+              },
               "description": "Each string is split on whitespace into an entrypoint and arguments."
             },
-            "script": {"type": "string", "description": "Repository script run with IMAGE and IMAGE_ARCH set."},
-            "verify_version": {"type": "boolean", "description": "Require a command to print the release version on release tags."}
+            "script": {
+              "type": "string",
+              "description": "Repository script run with IMAGE and IMAGE_ARCH set."
+            },
+            "verify_version": {
+              "type": "boolean",
+              "description": "Require a command to print the release version on release tags."
+            }
           }
         }
       },
       "if": {
-        "required": ["builders"],
-        "properties": {"builders": {"required": ["docker", "apko"]}}
+        "required": [
+          "builders"
+        ],
+        "properties": {
+          "builders": {
+            "required": [
+              "docker",
+              "apko"
+            ]
+          }
+        }
       },
       "then": {
-        "required": ["primary"]
+        "required": [
+          "primary"
+        ]
       }
     },
     "docker": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": {"enum": ["build", "bake"], "description": "build runs a Dockerfile. bake runs docker-bake.hcl."},
-        "context": {"type": "string"},
-        "dockerfile": {"type": "string"},
-        "target": {"type": "string"},
+        "mode": {
+          "enum": [
+            "build",
+            "bake"
+          ],
+          "description": "build runs a Dockerfile. bake runs docker-bake.hcl."
+        },
+        "context": {
+          "type": "string"
+        },
+        "dockerfile": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
         "build_args": {
           "type": "object",
-          "additionalProperties": {"type": "string"}
+          "additionalProperties": {
+            "type": "string"
+          }
         },
-        "bake_file": {"type": "string"},
+        "bake_file": {
+          "type": "string"
+        },
         "set": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^[^=]+=.*$"},
+          "items": {
+            "type": "string",
+            "pattern": "^[^=]+=.*$"
+          },
           "description": "bake mode only: KEY=VALUE variables passed to docker/bake-action."
+        },
+        "tag_prefix": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9.-]*$",
+          "description": "Tag prefix for this builder. Overrides the default: empty for the primary builder, the builder name and a dash for the secondary builder. The top-level tag_prefix is still prepended."
         }
       }
     },
@@ -173,7 +305,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "config": {"type": "string", "description": "apko configuration path. Defaults to apko/<image>.yaml. Ignored when configs is set."},
+        "config": {
+          "type": "string",
+          "description": "apko configuration path. Defaults to apko/<image>.yaml. Ignored when configs is set."
+        },
         "configs": {
           "type": "array",
           "minItems": 1,
@@ -181,17 +316,31 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["config"],
+            "required": [
+              "config"
+            ],
             "properties": {
-              "config": {"type": "string"},
-              "tag_suffix": {"type": "string", "pattern": "^[a-zA-Z0-9.-]*$"}
+              "config": {
+                "type": "string"
+              },
+              "tag_suffix": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9.-]*$"
+              }
             }
           }
         },
         "needs_packages": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Names from the packages map whose APK repositories the build needs."
+        },
+        "tag_prefix": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9.-]*$",
+          "description": "Tag prefix for this builder. Overrides the default: empty for the primary builder, the builder name and a dash for the secondary builder. The top-level tag_prefix is still prepended."
         }
       }
     }

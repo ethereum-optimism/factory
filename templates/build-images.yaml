@@ -1,6 +1,8 @@
 # Caller for ethereum-optimism/factory build-images.yaml.
 # Copy to .github/workflows/build-images.yaml in the repository that owns the images.
-# Keep .github/images.json in that repository describing the images.
+# The repository needs .github/images.json (see docs/images-catalog.md) and a
+# GitHub environment named "release" for publishing. Require the "result" job of
+# this workflow as the status check.
 name: Build images
 
 on:

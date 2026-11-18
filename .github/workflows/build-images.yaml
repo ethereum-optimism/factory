@@ -3,11 +3,12 @@ name: Build images (Reusable)
 # Builds Dockerfile and apko images from the caller's images catalog.
 # Untrusted runs (pull requests, merge groups, forks, other branches) build
 # amd64 images locally and smoke test them. Trusted runs (default branch
-# pushes, schedules, dispatches on the default branch, tags) also publish,
-# attest, and smoke test the arm64 digests.
+# pushes, schedules, dispatches on the default branch, tags) publish, attest,
+# and smoke test every architecture of the pushed digest.
 #
-# Every job checks out this repository at github.job_workflow_sha and runs the
-# composite actions from that checkout.
+# Every job checks out this repository at job.workflow_sha and runs the
+# composite actions from that checkout. The result job is the single status to
+# require.
 
 on:
   workflow_call:
@@ -17,11 +18,6 @@ on:
         required: false
         type: string
         default: '.github/images.json'
-      environment:
-        description: 'GitHub environment for the publish jobs. Its protection rules gate publishing.'
-        required: false
-        type: string
-        default: 'release'
 
 jobs:
   plan:
@@ -36,30 +32,52 @@ jobs:
       has_builds: ${{ steps.plan.outputs.has_builds }}
       has_publish: ${{ steps.plan.outputs.has_publish }}
       has_manifest: ${{ steps.plan.outputs.has_manifest }}
-      has_smoke_arm64: ${{ steps.plan.outputs.has_smoke_arm64 }}
+      has_smoke: ${{ steps.plan.outputs.has_smoke }}
       packages_matrix: ${{ steps.plan.outputs.packages_matrix }}
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
       publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
       manifest_matrix: ${{ steps.plan.outputs.manifest_matrix }}
-      smoke_arm64_matrix: ${{ steps.plan.outputs.smoke_arm64_matrix }}
+      smoke_matrix: ${{ steps.plan.outputs.smoke_matrix }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Compute trust
@@ -90,17 +108,39 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
           persist-credentials: false
 
       - name: Build package
@@ -138,17 +178,39 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
           persist-credentials: false
 
       - name: Download APK artifacts
@@ -197,7 +259,7 @@ jobs:
     name: publish (${{ matrix.id }})
     needs: [plan, packages]
     if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_publish == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
-    environment: ${{ inputs.environment }}
+    environment: release
     strategy:
       fail-fast: true
       matrix:
@@ -213,17 +275,39 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
           persist-credentials: false
 
       - name: Download APK artifacts
@@ -264,34 +348,6 @@ jobs:
           registry: us-docker.pkg.dev
           username: oauth2accesstoken
           password: ${{ steps.ar_token.outputs.token }}
-
-      - name: Build image for pre-push smoke test
-        id: local
-        if: matrix.smoke_local
-        uses: ./.factory/actions/build-image
-        with:
-          builder: ${{ matrix.builder }}
-          image: ${{ matrix.image }}
-          local_ref: ${{ matrix.local_ref }}
-          mode: ${{ matrix.mode }}
-          context: ${{ matrix.context }}
-          dockerfile: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          build_args: ${{ matrix.build_args }}
-          bake_file: ${{ matrix.bake_file }}
-          set: ${{ matrix.set }}
-          config: ${{ matrix.config }}
-          repositories: ${{ steps.stage.outputs.repositories }}
-
-      - name: Smoke test before push
-        if: matrix.smoke_local
-        uses: ./.factory/actions/smoke-test
-        with:
-          image: ${{ steps.local.outputs.image }}
-          arch: amd64
-          commands: ${{ matrix.smoke_commands }}
-          script: ${{ matrix.smoke_script }}
-          expected_version: ${{ matrix.expected_version }}
 
       - name: Publish image
         id: publish
@@ -347,7 +403,7 @@ jobs:
     name: manifest (${{ matrix.image }})
     needs: [plan, publish]
     if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_manifest == 'true' && needs.publish.result == 'success' }}
-    environment: ${{ inputs.environment }}
+    environment: release
     strategy:
       fail-fast: true
       matrix:
@@ -363,17 +419,39 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
           persist-credentials: false
 
       - name: Authenticate to Google Cloud
@@ -434,15 +512,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  smoke-arm64:
-    name: smoke arm64 (${{ matrix.id }})
+  smoke:
+    name: smoke (${{ matrix.id }})
     needs: [plan, publish, publish-manifest]
-    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_smoke_arm64 == 'true' && needs.publish.result == 'success' && (needs.publish-manifest.result == 'success' || needs.publish-manifest.result == 'skipped') }}
-    environment: ${{ inputs.environment }}
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_smoke == 'true' && needs.publish.result == 'success' && (needs.publish-manifest.result == 'success' || needs.publish-manifest.result == 'skipped') }}
+    environment: release
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.plan.outputs.smoke_arm64_matrix) }}
+        include: ${{ fromJSON(needs.plan.outputs.smoke_matrix) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -453,18 +531,35 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout caller repository
-        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
-        with:
-          persist-credentials: false
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
 
       - name: Checkout factory actions
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
-          repository: ethereum-optimism/factory
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .factory
           persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -505,12 +600,57 @@ jobs:
           digest="$(cat "$FINAL_DIR"/*.txt | tr -d '[:space:]')"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test published digest
+      - name: Smoke test pushed digest
         uses: ./.factory/actions/smoke-test
         with:
           image: ${{ matrix.registry }}/${{ matrix.image }}@${{ steps.digest.outputs.digest }}
-          arch: arm64
+          arch: ${{ matrix.arch }}
           pull: true
           commands: ${{ matrix.smoke_commands }}
           script: ${{ matrix.smoke_script }}
           expected_version: ${{ matrix.expected_version }}
+
+  result:
+    name: result
+    needs: [plan, packages, build, publish, publish-manifest, smoke]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Aggregate job results
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PACKAGES_RESULT: ${{ needs.packages.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          MANIFEST_RESULT: ${{ needs.publish-manifest.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          HAS_BUILDS: ${{ needs.plan.outputs.has_builds }}
+          HAS_PUBLISH: ${{ needs.plan.outputs.has_publish }}
+        run: |
+          set -euo pipefail
+          failures=()
+          if [ "$PLAN_RESULT" != "success" ]; then
+            failures+=("plan: $PLAN_RESULT")
+          fi
+          for entry in "packages:$PACKAGES_RESULT" "build:$BUILD_RESULT" "publish:$PUBLISH_RESULT" \
+                       "publish-manifest:$MANIFEST_RESULT" "smoke:$SMOKE_RESULT"; do
+            name="${entry%%:*}"
+            value="${entry#*:}"
+            case "$value" in
+              success|skipped) ;;
+              *) failures+=("$name: $value") ;;
+            esac
+          done
+          if [ "$PLAN_RESULT" = "success" ] \
+             && { [ "$HAS_BUILDS" = "true" ] || [ "$HAS_PUBLISH" = "true" ]; } \
+             && [ "$BUILD_RESULT" != "success" ] && [ "$PUBLISH_RESULT" != "success" ]; then
+            failures+=("plan reported work but neither build nor publish succeeded")
+          fi
+          if [ "${#failures[@]}" -gt 0 ]; then
+            for failure in "${failures[@]}"; do
+              echo "::error::$failure" >&2
+            done
+            exit 1
+          fi
+          echo "All jobs succeeded or were skipped as planned."

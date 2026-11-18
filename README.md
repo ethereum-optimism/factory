@@ -41,24 +41,41 @@ and validate them with service-owned integration tests.
 publishes the Dockerfile and apko images declared in a repository's catalog.
 The catalog format is in [docs/images-catalog.md](docs/images-catalog.md), and
 [templates/build-images.yaml](templates/build-images.yaml) is a minimal caller.
-Callers pin the workflow by full commit SHA and pass no secrets.
+
+Pin the workflow by full commit SHA and pass no secrets:
+
+```yaml
+jobs:
+  build-images:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ethereum-optimism/factory/.github/workflows/build-images.yaml@0000000000000000000000000000000000000000
+```
+
+Replace the placeholder with the factory commit SHA. Publishing needs a GitHub
+environment named `release` in the calling repository. Require the `result` job
+as the status check.
 
 The run is either trusted or untrusted, decided once by
 `actions/fork-context`:
 
 - Trusted: a push, schedule, or dispatch on the default branch, or a tag push.
-  These runs build, smoke test, push, and attest images. They also smoke test
-  the arm64 digest after publishing.
+  These runs publish, attest, and smoke test every architecture of the pushed
+  digest.
 - Untrusted: pull requests, merge groups, forks, and dispatches from other
   branches. These runs plan only the affected images, build `amd64` images and
-  `x86_64` packages locally, and smoke test them. They have `contents: read`
-  only and no access to secrets or an OIDC token.
+  `x86_64` packages on standard hosted runners, and smoke test them. They have
+  `contents: read` only and no access to secrets or an OIDC token.
 
 The planner is `actions/plan-images`. The step actions are
 `actions/build-packages`, `actions/stage-packages`, `actions/build-image`,
 `actions/smoke-test`, and `actions/publish-image`. The self-test workflow
 `.github/workflows/build-images-selftest.yaml` runs the untrusted path on every
-pull request against the fixtures in `test/fixtures/`.
+pull request against the fixtures in `test/fixtures/`, and
+`scripts/lint-untrusted-permissions.sh` checks the permission and credential
+rules of the workflow and the actions it reaches.
 
 ## `images.json`
 

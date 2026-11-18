@@ -1,6 +1,6 @@
 name: 'Plan images'
 description: >
-  Plan the package, build, publish, manifest, and arm64 smoke matrices for
+  Plan the package, build, publish, manifest, and smoke matrices for
   build-images.yaml from an images catalog. Reads a version 2 catalog, or a
   legacy images.json merged with images.apko.json. On pull_request and push
   only the images and packages affected by the diff are planned. Release tags
@@ -37,9 +37,9 @@ outputs:
   has_manifest:
     description: '"true" when any docker manifest legs are planned.'
     value: ${{ steps.plan.outputs.has_manifest }}
-  has_smoke_arm64:
-    description: '"true" when any arm64 smoke legs are planned.'
-    value: ${{ steps.plan.outputs.has_smoke_arm64 }}
+  has_smoke:
+    description: '"true" when any smoke legs are planned.'
+    value: ${{ steps.plan.outputs.has_smoke }}
   packages_matrix:
     description: 'JSON array of package legs (one per package and architecture).'
     value: ${{ steps.plan.outputs.packages_matrix }}
@@ -47,14 +47,14 @@ outputs:
     description: 'JSON array of untrusted build legs (one per image and builder variant, amd64 only).'
     value: ${{ steps.plan.outputs.build_matrix }}
   publish_matrix:
-    description: 'JSON array of publish legs: one per docker architecture and one per apko variant.'
+    description: 'JSON array of trusted publish legs: one per docker architecture and one per apko variant.'
     value: ${{ steps.plan.outputs.publish_matrix }}
   manifest_matrix:
     description: 'JSON array of docker multi-arch manifest legs, one per image.'
     value: ${{ steps.plan.outputs.manifest_matrix }}
-  smoke_arm64_matrix:
-    description: 'JSON array of arm64 smoke legs that pull the published digest.'
-    value: ${{ steps.plan.outputs.smoke_arm64_matrix }}
+  smoke_matrix:
+    description: 'JSON array of smoke legs, one per image, builder, and architecture, pulling the pushed digest.'
+    value: ${{ steps.plan.outputs.smoke_matrix }}
 
 runs:
   using: composite

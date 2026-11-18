@@ -22,13 +22,13 @@ case "$TRUSTED" in
   true|false) ;;
   *) echo "::error::TRUSTED must be true or false" >&2; exit 1 ;;
 esac
-if [[ ! -f "$CONFIG" ]]; then
+LEGACY_APKO_CONFIG="${LEGACY_APKO_CONFIG:-.github/images.apko.json}"
+if [[ ! -f "$CONFIG" && ! -f "$LEGACY_APKO_CONFIG" ]]; then
   echo "::error::Catalog not found: $CONFIG" >&2
   exit 1
 fi
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set}"
 
-LEGACY_APKO_CONFIG="${LEGACY_APKO_CONFIG:-.github/images.apko.json}"
 EVENT_NAME="${GITHUB_EVENT_NAME:-workflow_dispatch}"
 EVENT_PATH="${GITHUB_EVENT_PATH:-}"
 REF_TYPE="${GITHUB_REF_TYPE:-}"
@@ -45,7 +45,6 @@ if [[ -z "$REF_TYPE" && -n "${GITHUB_REF:-}" ]]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 MODEL="$WORK/model.json"
 
 # jq library shared by normalization and matrix generation.
@@ -100,7 +99,9 @@ def norm_package($k):
     };
 
 def validate_package($k):
-  if is_one_of(.runner_profile; ["standard", "large"]) | not
+  if ($k | test("^[a-z0-9][a-z0-9._-]*$")) | not
+    then error("package name \($k) must match ^[a-z0-9][a-z0-9._-]*$") else . end
+  | if is_one_of(.runner_profile; ["standard", "large"]) | not
     then error("packages.\($k).runner_profile must be standard or large") else . end
   | if ([.archs[] | select(is_one_of(.; ["x86_64", "aarch64"]) | not)] | length) > 0 or (.archs | length) == 0
     then error("packages.\($k).archs must be a non-empty subset of x86_64, aarch64") else . end
@@ -120,10 +121,12 @@ def norm_builders($n; $b):
           target: ($b.docker.target // ""),
           build_args: ($b.docker.build_args | kv_obj),
           bake_file: ($b.docker.bake_file // "docker-bake.hcl"),
-          set: ($b.docker.set | lines_arr)
+          set: ($b.docker.set | lines_arr),
+          tag_prefix: ($b.docker.tag_prefix // null)
         }} else {} end)
     + (if $b.apko then {apko: {
           needs_packages: ($b.apko.needs_packages // []),
+          tag_prefix: ($b.apko.tag_prefix // null),
           configs: (if ($b.apko.configs // null) != null then
                       [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // "")}]
                     else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end)
@@ -157,6 +160,8 @@ def validate_image($n; $pkgs):
       then error("image \($n): primary must be docker or apko") else . end
   | if (.builders | has($i.primary)) | not
       then error("image \($n): primary \($i.primary) has no matching builder") else . end
+  | if ([(.builders | to_entries[]) | (.value.tag_prefix // "") | select(test("^[a-zA-Z0-9.-]*$") | not)] | length) > 0
+      then error("image \($n): builders tag_prefix may only contain letters, digits, dot, dash") else . end
   | if ($i.archs | length) == 0 or ([$i.archs[] | select(is_one_of(.; ["amd64", "arm64"]) | not)] | length) > 0
       then error("image \($n): archs must be a non-empty subset of amd64, arm64") else . end
   | if .builders.docker != null then
@@ -196,7 +201,7 @@ def normalize_v2:
           service_match: 1,
           version_match: 2,
           service: "",
-          publish_tag: "${version}",
+          publish_tag: "${ref_name}",
           source_ref: "${ref_name}"
         } + ($c.release // {})),
       shared_paths: ($c.shared_paths // []),
@@ -251,6 +256,7 @@ def legacy_to_v2($d; $a):
                   }} end)
                 + (if $a1 == null then {} else {apko: {
                     needs_packages: ($a1.needs_melange // []),
+                    tag_prefix: (if ($d.images // {} | length) > 0 then "apko-" else "" end),
                     configs: [($a1.apko_configs // ["apko/" + $n + ".yaml"])[]
                       | {config: ., tag_suffix: (sub("^apko/"; "") | sub("\\.yaml$"; "") | ltrimstr($n))}]
                   }} end)),
@@ -279,7 +285,7 @@ def runner_for($profile; $arch):
 def sanitize_ref: gsub("[^a-zA-Z0-9.]"; "-");
 def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
 def has_smoke($i): (($i.smoke.commands | length) > 0) or ($i.smoke.script != "");
-def prefix_for($m; $i; $b): $m.tag_prefix + (if $i.primary == $b then "" else ($b + "-") end);
+def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $i.primary == $b then "" else ($b + "-") end));
 def local_ref($id): "local/" + ($id | ascii_downcase) + ":smoke";
 def merge_args($hook; $args): ($hook + $args) | to_entries | map("\(.key)=\(.value)") | join("\n");
 def pkg_env($hook; $env): [$hook, $env] | map(select(. != "")) | join("\n");
@@ -287,12 +293,17 @@ JQ
 
 # Normalize the catalog into the version 2 model at $MODEL.
 normalize_catalog() {
-  local version
+  local doc="$CONFIG" version
+  if [[ ! -f "$doc" ]]; then
+    doc="$WORK/no-docker.json"
+    echo '{}' > "$doc"
+    echo "No $CONFIG: reading only $LEGACY_APKO_CONFIG"
+  fi
   version=$(jq -r 'if type == "object" then (.version // 1 | tostring)
-                   else error("catalog must be a JSON object") end' "$CONFIG")
+                   else error("catalog must be a JSON object") end' "$doc")
   case "$version" in
     2)
-      jq -c "${JQ_LIB} normalize_v2" "$CONFIG" > "$MODEL"
+      jq -c "${JQ_LIB} normalize_v2" "$doc" > "$MODEL"
       echo "Catalog: version 2 ($CONFIG)"
       ;;
     1)
@@ -300,11 +311,11 @@ normalize_catalog() {
       echo '{}' > "$apko_file"
       if [[ -f "$LEGACY_APKO_CONFIG" ]]; then
         apko_file="$LEGACY_APKO_CONFIG"
-        echo "Catalog: legacy v1 $CONFIG merged with $LEGACY_APKO_CONFIG"
+        echo "Catalog: legacy v1 $doc merged with $LEGACY_APKO_CONFIG"
       else
-        echo "Catalog: legacy v1 $CONFIG"
+        echo "Catalog: legacy v1 $doc"
       fi
-      jq -c --slurpfile a "$apko_file" "${JQ_LIB} legacy_to_v2(.; \$a[0]) | normalize_v2" "$CONFIG" > "$MODEL"
+      jq -c --slurpfile a "$apko_file" "${JQ_LIB} legacy_to_v2(.; \$a[0]) | normalize_v2" "$doc" > "$MODEL"
       ;;
     *)
       echo "::error::Unsupported catalog version: $version" >&2
@@ -326,7 +337,7 @@ run_hook() {
     exit 1
   fi
   hook_out="$WORK/hook.out"
-  bash "$hook_path" > "$hook_out"
+  env -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STEP_SUMMARY -u GITHUB_STATE bash "$hook_path" > "$hook_out"
   jq -Rn '[inputs | select(length > 0)
            | (index("=")) as $ix
            | if $ix == null or $ix == 0 or ((.[0:$ix]) | test("^[A-Za-z_][A-Za-z0-9_]*$") | not)
@@ -422,7 +433,7 @@ plan_release() {
     exit 1
   fi
   if [[ ! "$REF_NAME" =~ $regex ]]; then
-    echo "Tag ref '$REF_NAME' does not match release.tag_regex; no builds"
+    echo "::notice::Release tag '$REF_NAME' does not match release.tag_regex; planning nothing"
     SELECT_IMAGES=()
     SELECT_PACKAGES=()
     return 0
@@ -445,7 +456,7 @@ plan_release() {
     svc=$(render "$svc_template")
   fi
   if ! jq -e --arg n "$svc" '.images[$n]' "$MODEL" >/dev/null 2>&1; then
-    echo "Tag ref '$REF_NAME' resolved to '$svc', which is not in the catalog; no builds"
+    echo "::notice::Release tag '$REF_NAME' names image '$svc', which is not in the catalog; planning nothing"
     SELECT_IMAGES=()
     SELECT_PACKAGES=()
     return 0
@@ -573,6 +584,15 @@ main() {
     load_all
   fi
 
+  if [[ "$TRUSTED" != "true" ]]; then
+    local skipped_name
+    for skipped_name in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+      if ! jq -e --arg n "$skipped_name" 'any(.images[$n].archs[]; . == "amd64")' "$MODEL" >/dev/null; then
+        echo "::notice::Image $skipped_name has no amd64 architecture; skipped on this untrusted run"
+      fi
+    done
+  fi
+
   local images_json packages_json
   images_json=$(to_json_array "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}")
   packages_json=$(to_json_array "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}")
@@ -594,7 +614,6 @@ main() {
     --arg is_release "$IS_RELEASE" \
     "${JQ_LIB}"'
       $m[0] as $m
-      | ($trusted) as $trusted
       | ([ $pkgs[] as $p
           | $m.packages[$p] as $c
           | (if $trusted then $c.archs else [$c.archs[] | select(. == "x86_64")] end)[] as $arch
@@ -602,7 +621,7 @@ main() {
               id: "\($p)-\($arch)",
               package: $p,
               arch: $arch,
-              runner: runner_for($c.runner_profile; $arch),
+              runner: (if $trusted then runner_for($c.runner_profile; $arch) else "ubuntu-24.04" end),
               config: $c.config,
               checkout_source: ($c.source != null),
               source_repository: ($c.source.repository // ""),
@@ -679,7 +698,6 @@ main() {
                     kind: "docker-arch",
                     arch: $a,
                     runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
-                    local_ref: local_ref("\($n)-docker-\($a)"),
                     mode: $i.builders.docker.mode,
                     context: $i.builders.docker.context,
                     dockerfile: $i.builders.docker.dockerfile,
@@ -690,11 +708,6 @@ main() {
                     config: "",
                     needs_packages: "",
                     suffix: "",
-                    smoke_local: ($a == "amd64" and has_smoke($i)),
-                    has_smoke: has_smoke($i),
-                    smoke_commands: ($i.smoke.commands | tojson),
-                    smoke_script: $i.smoke.script,
-                    expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end),
                     sha_tag: (prefix_for($m; $i; "docker") + $sha),
                     ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                     registry: $m.registry
@@ -709,7 +722,6 @@ main() {
                       arch: "",
                       archs: ($archs | join(",")),
                       runner: "ubuntu-24.04",
-                      local_ref: local_ref("\($n)-apko\($sfx)"),
                       mode: "",
                       context: "",
                       dockerfile: "",
@@ -720,11 +732,6 @@ main() {
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
                       suffix: $v.tag_suffix,
-                      smoke_local: ($v.tag_suffix == "" and has_member($archs; "amd64") and has_smoke($i)),
-                      has_smoke: ($v.tag_suffix == "" and has_smoke($i)),
-                      smoke_commands: (if $v.tag_suffix == "" then ($i.smoke.commands | tojson) else "[]" end),
-                      smoke_script: (if $v.tag_suffix == "" then $i.smoke.script else "" end),
-                      expected_version: (if $i.smoke.verify_version and $version != "" and $v.tag_suffix == "" then $version else "" end),
                       sha_tag: (prefix_for($m; $i; "apko") + $sha + $v.tag_suffix),
                       ref_tag: (prefix_for($m; $i; "apko") + ($ref_name | sanitize_ref) + $v.tag_suffix),
                       registry: $m.registry
@@ -751,26 +758,29 @@ main() {
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | select(has_smoke($i) and has_member($i.archs; "arm64"))
+            | select(has_smoke($i))
+            | $i.archs[] as $a
             | ( (if $i.builders.docker then [{
-                    id: "\($n)-docker-arm64",
+                    id: "\($n)-docker-\($a)",
                     image: $n,
                     builder: "docker",
+                    arch: $a,
+                    runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                     registry: $m.registry,
                     final_artifact: "final-\($n)-docker",
-                    runner: "ubuntu-24.04-arm",
                     smoke_commands: ($i.smoke.commands | tojson),
                     smoke_script: $i.smoke.script,
                     expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end)
                   }] else [] end)
                 + (if $i.builders.apko then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
                     | {
-                        id: "\($n)-apko-arm64",
+                        id: "\($n)-apko-\($a)",
                         image: $n,
                         builder: "apko",
+                        arch: $a,
+                        runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                         registry: $m.registry,
                         final_artifact: "final-\($n)-apko",
-                        runner: "ubuntu-24.04-arm",
                         smoke_commands: ($i.smoke.commands | tojson),
                         smoke_script: $i.smoke.script,
                         expected_version: (if $i.smoke.verify_version and $version != "" then $version else "" end)
@@ -786,12 +796,12 @@ main() {
           has_builds: (($build | length) > 0 | tostring),
           has_publish: (($publish | length) > 0 | tostring),
           has_manifest: (($manifest | length) > 0 | tostring),
-          has_smoke_arm64: (($smoke | length) > 0 | tostring),
+          has_smoke: (($smoke | length) > 0 | tostring),
           packages_matrix: ($packages | tojson),
           build_matrix: ($build | tojson),
           publish_matrix: ($publish | tojson),
           manifest_matrix: ($manifest | tojson),
-          smoke_arm64_matrix: ($smoke | tojson),
+          smoke_matrix: ($smoke | tojson),
           selected_images: ($images | join(",")),
           selected_packages: ($pkgs | join(","))
         }
@@ -805,7 +815,7 @@ main() {
   fi
 
   jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$outputs" >> "$GITHUB_OUTPUT"
-  jq -r '"selected images: \(.selected_images)\nselected packages: \(.selected_packages)\nbuild legs: \(.build_matrix | fromjson | length)\npackage legs: \(.packages_matrix | fromjson | length)\npublish legs: \(.publish_matrix | fromjson | length)\nmanifest legs: \(.manifest_matrix | fromjson | length)\narm64 smoke legs: \(.smoke_arm64_matrix | fromjson | length)"' <<< "$outputs"
+  jq -r '"selected images: \(.selected_images)\nselected packages: \(.selected_packages)\nbuild legs: \(.build_matrix | fromjson | length)\npackage legs: \(.packages_matrix | fromjson | length)\npublish legs: \(.publish_matrix | fromjson | length)\nmanifest legs: \(.manifest_matrix | fromjson | length)\nsmoke legs: \(.smoke_matrix | fromjson | length)"' <<< "$outputs"
 }
 
 main

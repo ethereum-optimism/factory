@@ -1,10 +1,11 @@
 name: 'Publish image'
 description: >
   Publish one image to the registry and print its digest. Three kinds:
-  apko publishes a multi-architecture image with apko publish; docker-arch
-  builds one architecture natively and pushes it by digest; docker-manifest
-  merges the per-architecture digests into the tagged manifest list.
-  Registry login is performed by the calling job before this action runs.
+  apko publishes a multi-architecture image with apko publish inside the pinned
+  Wolfi SDK image; docker-arch builds one architecture natively and pushes it by
+  digest; docker-manifest merges the per-architecture digests into the tagged
+  manifest list. The calling job performs the registry login for docker kinds,
+  and passes the registry token for the apko kind.
 
 inputs:
   kind:
@@ -23,7 +24,7 @@ inputs:
     description: 'Tag for the sanitized ref or release version, including any builder prefix and variant suffix.'
     required: true
   id:
-    description: 'Leg identifier, used to name the digest output file.'
+    description: 'Leg identifier. The digest is written to RUNNER_TEMP/<id>.txt.'
     required: true
   registry_token:
     description: 'apko kind only: access token for the registry, used for apko login.'
@@ -86,6 +87,14 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve apko sandbox image
+      id: sandbox
+      if: inputs.kind == 'apko'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "image=$(tr -d '[:space:]' < "${GITHUB_ACTION_PATH}/../apko-sdk/image")" >> "$GITHUB_OUTPUT"
+
     - name: Set up Docker Buildx
       if: inputs.kind != 'apko'
       uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -95,56 +104,78 @@ runs:
       if: inputs.kind == 'apko'
       shell: bash
       env:
+        APKO_SANDBOX: ${{ steps.sandbox.outputs.image }}
         APKO_CONFIG: ${{ inputs.config }}
         APKO_TAG: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.sha_tag }}
         APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.ref_tag }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
-        APKO_REGISTRY_USER: oauth2accesstoken
-        APKO_REGISTRY_PASS: ${{ inputs.registry_token }}
-        APKO_DIGEST_FILE: ${{ runner.temp }}/apko-${{ inputs.id }}.digest
+        APKO_GENERIC_USER: oauth2accesstoken
+        APKO_GENERIC_PASS: ${{ inputs.registry_token }}
+        APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        docker run -i --rm --entrypoint /bin/bash \
-          --network host \
-          -v "$PWD:${GITHUB_WORKSPACE}" \
-          -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
-          --workdir "${GITHUB_WORKSPACE}" \
-          -e APKO_CONFIG \
-          -e APKO_TAG \
-          -e APKO_EXTRA_TAGS \
-          -e APKO_REPOSITORIES \
-          -e APKO_ARCHS \
-          -e APKO_REGISTRY_USER \
-          -e APKO_REGISTRY_PASS \
-          -e APKO_DIGEST_FILE \
-          ghcr.io/wolfi-dev/sdk:latest <<'APKO_EOF'
+        config_path="${GITHUB_WORKSPACE}/${APKO_CONFIG}"
+        config_dir="$(cd "$(dirname "$config_path")" && pwd)"
+        config_file="$(basename "$config_path")"
+        out_dir="$(mktemp -d "${APKO_BUILD_ROOT}/apko-publish.XXXXXX")"
+
+        mounts=(-v "${config_dir}:${config_dir}:ro" -v "${out_dir}:${out_dir}")
+        if [ -n "$APKO_REPOSITORIES" ]; then
+          IFS=',' read -ra repos <<< "$APKO_REPOSITORIES"
+          for repo in "${repos[@]}"; do
+            mounts+=(-v "${repo}:${repo}:ro")
+          done
+        fi
+
+        read -r -d '' apko_script <<'APKO_EOF' || true
         set -euo pipefail
-        echo "$APKO_REGISTRY_PASS" | /usr/bin/apko login -u "$APKO_REGISTRY_USER" \
-          --password-stdin "$(echo "$APKO_TAG" | cut -d'/' -f1)"
+        if [[ -n "$APKO_GENERIC_USER" && -n "$APKO_GENERIC_PASS" ]]; then
+          echo "$APKO_GENERIC_PASS" | /usr/bin/apko login -u "$APKO_GENERIC_USER" \
+            --password-stdin "$(echo "$APKO_TAG" | cut -d'/' -f1)"
+        fi
         export SOURCE_DATE_EPOCH=0
         tags=("$APKO_TAG")
-        IFS=',' read -ra extra_tags <<< "$APKO_EXTRA_TAGS"
-        for tag in "${extra_tags[@]}"; do
-          tag="${tag#"${tag%%[![:space:]]*}"}"
-          tag="${tag%"${tag##*[![:space:]]}"}"
-          [[ -n "$tag" ]] && tags+=("$tag")
-        done
+        if [[ -n "$APKO_EXTRA_TAGS" ]]; then
+          IFS=',' read -ra extra_tags <<< "$APKO_EXTRA_TAGS"
+          for tag in "${extra_tags[@]}"; do
+            tag="${tag#"${tag%%[![:space:]]*}"}"
+            tag="${tag%"${tag##*[![:space:]]}"}"
+            [[ -n "$tag" ]] && tags+=("$tag")
+          done
+        fi
         repos=()
         [[ -n "$APKO_REPOSITORIES" ]] && repos=(-r "$APKO_REPOSITORIES")
         /usr/bin/apko publish \
           --ignore-signatures \
           --arch "$APKO_ARCHS" \
           "${repos[@]+"${repos[@]}"}" \
-          "$APKO_CONFIG" "${tags[@]}" | tee "$APKO_DIGEST_FILE"
+          "$APKO_CONFIG_PATH" "${tags[@]}" | tee "$APKO_OUT_DIR/publish.digest"
         APKO_EOF
-        ref="$(tail -n 1 "$APKO_DIGEST_FILE")"
+
+        docker run --rm --network host \
+          --entrypoint /bin/bash \
+          --workdir "$out_dir" \
+          "${mounts[@]}" \
+          -e APKO_GENERIC_USER \
+          -e APKO_GENERIC_PASS \
+          -e APKO_TAG \
+          -e APKO_EXTRA_TAGS \
+          -e APKO_REPOSITORIES \
+          -e APKO_ARCHS \
+          -e APKO_CONFIG_PATH="${config_dir}/${config_file}" \
+          -e APKO_OUT_DIR="$out_dir" \
+          "$APKO_SANDBOX" -c "$apko_script"
+
+        ref="$(tail -n 1 "${out_dir}/publish.digest")"
         echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
 
     - name: Push architecture with docker build
       id: build
       if: inputs.kind == 'docker-arch' && inputs.mode == 'build'
       uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+      env:
+        SOURCE_DATE_EPOCH: '0'
       with:
         context: "{{defaultContext}}:${{ inputs.context }}"
         file: ${{ inputs.dockerfile }}
@@ -162,6 +193,8 @@ runs:
       id: bake
       if: inputs.kind == 'docker-arch' && inputs.mode == 'bake'
       uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7
+      env:
+        SOURCE_DATE_EPOCH: '0'
       with:
         source: .
         targets: ${{ inputs.target }}

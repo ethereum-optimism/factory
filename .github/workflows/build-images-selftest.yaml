@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   lint:
-    name: lint untrusted permissions
+    name: lint and lint self-tests
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -18,15 +18,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Lint untrusted permissions
+      - name: Lint build-images and its actions
         run: scripts/lint-untrusted-permissions.sh
+
+      - name: Lint self-tests
+        run: scripts/lint-untrusted-permissions.test.sh
 
   build-images:
     name: build-images (untrusted path)
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     uses: ./.github/workflows/build-images.yaml
     with:
       config: test/fixtures/images.json

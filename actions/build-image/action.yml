@@ -3,7 +3,7 @@ description: >
   Build one image for amd64 and load it into the local Docker daemon under
   local_ref, for smoke testing. The docker builder runs docker/build-push-action
   or docker/bake-action with load enabled. The apko builder runs apko build
-  inside the Wolfi SDK container, then docker load. Uses no registry
+  inside the pinned Wolfi SDK image, then docker load. Uses no registry
   credentials and no OIDC token.
 
 inputs:
@@ -61,6 +61,14 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve apko sandbox image
+      id: sandbox
+      if: inputs.builder == 'apko'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "image=$(tr -d '[:space:]' < "${GITHUB_ACTION_PATH}/../apko-sdk/image")" >> "$GITHUB_OUTPUT"
+
     - name: Set up Docker Buildx
       if: inputs.builder == 'docker'
       uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -68,6 +76,8 @@ runs:
     - name: Build image (docker build mode)
       if: inputs.builder == 'docker' && inputs.mode == 'build'
       uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+      env:
+        SOURCE_DATE_EPOCH: '0'
       with:
         context: "{{defaultContext}}:${{ inputs.context }}"
         file: ${{ inputs.dockerfile }}
@@ -82,6 +92,8 @@ runs:
     - name: Build image (docker bake mode)
       if: inputs.builder == 'docker' && inputs.mode == 'bake'
       uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7
+      env:
+        SOURCE_DATE_EPOCH: '0'
       with:
         source: .
         targets: ${{ inputs.target }}
@@ -98,35 +110,42 @@ runs:
       if: inputs.builder == 'apko'
       shell: bash
       env:
+        APKO_SANDBOX: ${{ steps.sandbox.outputs.image }}
         APKO_CONFIG: ${{ inputs.config }}
         APKO_TAG: ${{ inputs.local_ref }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
-        APKO_OUT: ${{ runner.temp }}/apko-build.tar
+        APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        docker run -i --rm --entrypoint /bin/bash \
-          --network host \
-          -v "$PWD:${GITHUB_WORKSPACE}" \
-          -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
-          --workdir "${GITHUB_WORKSPACE}" \
-          -e APKO_CONFIG \
-          -e APKO_TAG \
-          -e APKO_REPOSITORIES \
-          -e APKO_OUT \
-          ghcr.io/wolfi-dev/sdk:latest <<'APKO_EOF'
-        set -euo pipefail
-        repos=()
-        [[ -n "$APKO_REPOSITORIES" ]] && repos=(-r "$APKO_REPOSITORIES")
-        /usr/bin/apko build \
+        config_path="${GITHUB_WORKSPACE}/${APKO_CONFIG}"
+        config_dir="$(cd "$(dirname "$config_path")" && pwd)"
+        config_file="$(basename "$config_path")"
+        out_dir="$(mktemp -d "${APKO_BUILD_ROOT}/apko-build.XXXXXX")"
+
+        mounts=(-v "${config_dir}:${config_dir}:ro" -v "${out_dir}:${out_dir}")
+        repo_args=()
+        if [ -n "$APKO_REPOSITORIES" ]; then
+          IFS=',' read -ra repos <<< "$APKO_REPOSITORIES"
+          for repo in "${repos[@]}"; do
+            mounts+=(-v "${repo}:${repo}:ro")
+          done
+          repo_args=(-r "$APKO_REPOSITORIES")
+        fi
+
+        docker run --rm --network host \
+          --entrypoint /usr/bin/apko \
+          --workdir "$out_dir" \
+          "${mounts[@]}" \
+          "$APKO_SANDBOX" \
+          build \
           --ignore-signatures \
           --arch amd64 \
-          "${repos[@]+"${repos[@]}"}" \
-          "$APKO_CONFIG" "$APKO_TAG" "$APKO_OUT"
-        APKO_EOF
-        loaded="$(docker load -i "$APKO_OUT" | sed -n 's/^Loaded image: //p' | tail -n 1)"
+          "${repo_args[@]+"${repo_args[@]}"}" \
+          "${config_dir}/${config_file}" "$APKO_TAG" "${out_dir}/image.tar"
+
+        loaded="$(docker load -i "${out_dir}/image.tar" | sed -n 's/^Loaded image: //p' | tail -n 1)"
         if [ -z "$loaded" ]; then
           echo "::error::docker load did not report a loaded image for $APKO_TAG" >&2
           exit 1
         fi
         docker tag "$loaded" "$APKO_TAG"
-        rm -f "$APKO_OUT"
