@@ -10,6 +10,11 @@ Publishing jobs run in the GitHub environment named `release`, so the calling
 repository must define that environment and its protection rules. The workflow
 has no environment input.
 
+Publishing authenticates to Google Cloud through the `github-release` workload
+identity provider. That provider accepts only jobs that run in the `release`
+environment, so pull request and other untrusted runs cannot obtain a
+publishing credential.
+
 Require the `result` job of the caller run as the single status check. It fails
 when any job failed, and when the plan reported work that neither the build nor
 the publish job completed.

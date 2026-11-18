@@ -10,6 +10,9 @@ name: Build images (Reusable)
 # composite actions from that checkout. The result job is the single status to
 # require.
 
+env:
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-release
+
 on:
   workflow_call:
     inputs:
@@ -332,7 +335,7 @@ jobs:
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           project_id: oplabs-tools-artifacts
-          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
       - name: Get Artifact Registry token
@@ -460,7 +463,7 @@ jobs:
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           project_id: oplabs-tools-artifacts
-          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
       - name: Get Artifact Registry token
@@ -567,7 +570,7 @@ jobs:
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           project_id: oplabs-tools-artifacts
-          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
       - name: Get Artifact Registry token

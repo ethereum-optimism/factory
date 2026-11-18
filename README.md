@@ -55,8 +55,9 @@ jobs:
 ```
 
 Replace the placeholder with the factory commit SHA. Publishing needs a GitHub
-environment named `release` in the calling repository. Require the `result` job
-as the status check.
+environment named `release` in the calling repository, and it authenticates
+through the `github-release` workload identity provider, which accepts only jobs
+that run in that environment. Require the `result` job as the status check.
 
 The run is either trusted or untrusted, decided once by
 `actions/fork-context`:
