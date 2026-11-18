@@ -8,7 +8,7 @@ inputs:
     description: 'Comma-separated package names an apko build needs.'
     required: true
   source:
-    description: 'Directory holding the downloaded apks-* artifact directories.'
+    description: 'Directory holding one subdirectory per package, each with per-architecture subdirectories.'
     required: true
   destination:
     description: 'Directory that receives one repository per package.'
@@ -36,20 +36,14 @@ runs:
         for name in "${names[@]}"; do
           name="${name//[[:space:]]/}"
           [ -n "$name" ] || continue
-          dir="${DEST_DIR}/${name}"
-          mkdir -p "$dir"
-          found=0
-          for arch in x86_64 aarch64; do
-            artifact="${SOURCE_DIR}/apks-${name}-${arch}"
-            if [ -d "$artifact" ]; then
-              cp -R "$artifact"/. "$dir"/
-              found=1
-            fi
-          done
-          if [ "$found" != 1 ]; then
-            echo "::error::no apks artifacts found for package $name in $SOURCE_DIR" >&2
+          artifact="${SOURCE_DIR}/${name}"
+          if [ ! -d "$artifact" ]; then
+            echo "::error::no APK artifact for package $name in $SOURCE_DIR" >&2
             exit 1
           fi
+          dir="${DEST_DIR}/${name}"
+          mkdir -p "$dir"
+          cp -R "$artifact"/. "$dir"/
           repos+=("$dir")
         done
         joined=""

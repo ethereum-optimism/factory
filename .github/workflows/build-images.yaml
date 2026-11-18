@@ -166,7 +166,7 @@ jobs:
     needs: [plan, packages]
     if: ${{ always() && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.has_builds == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
     runs-on: ubuntu-24.04
@@ -219,6 +219,7 @@ jobs:
         with:
           pattern: apks-*
           path: ${{ runner.temp }}/apks
+          merge-multiple: true
 
       - name: Stage APK repositories
         id: stage
@@ -316,6 +317,7 @@ jobs:
         with:
           pattern: apks-*
           path: ${{ runner.temp }}/apks
+          merge-multiple: true
 
       - name: Stage APK repositories
         id: stage
