@@ -1,0 +1,245 @@
+name: 'Build packages'
+description: >
+  Build one melange package for one architecture and upload its APK repository
+  as the artifact apks-<package>-<arch>. Optionally checks out a source
+  repository, restores and saves the melange cache, and applies build
+  environment entries. Uses no secrets and no OIDC token.
+
+inputs:
+  package:
+    description: 'Package name from the catalog packages map.'
+    required: true
+  arch:
+    description: 'Melange architecture: x86_64 or aarch64.'
+    required: true
+  config:
+    description: 'Melange configuration path, relative to the repository root.'
+    required: true
+  cargo_profile:
+    description: 'Cargo profile exported to melange pipelines. Empty when unused.'
+    required: false
+    default: ''
+  build_version:
+    description: 'Release version exported as GIT_VERSION. Empty for non-release builds.'
+    required: false
+    default: ''
+  build_env:
+    description: 'Extra KEY=VALUE lines appended to the melange environment, one per line.'
+    required: false
+    default: ''
+  checkout_source:
+    description: '"true" to check out a source repository into source_path before building.'
+    required: false
+    default: 'false'
+  source_repository:
+    description: 'Source repository (owner/name). Defaults to the calling repository.'
+    required: false
+    default: ''
+  source_ref:
+    description: 'Git ref for the source repository.'
+    required: false
+    default: ''
+  source_path:
+    description: 'Checkout path for the source repository. Must not be "." when checkout_source is true.'
+    required: false
+    default: '.'
+  source_submodules:
+    description: 'Submodule mode for the source checkout: false, true, or recursive.'
+    required: false
+    default: 'false'
+  use_gha_cache:
+    description: '"true" to restore and save the melange cache.'
+    required: false
+    default: 'false'
+  cache_key_files:
+    description: 'Comma-separated files, relative to the workspace, hashed into the cache key.'
+    required: false
+    default: ''
+  trusted:
+    description: '"true" for trusted runs. Only trusted runs may save the cache.'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout source repository
+      if: inputs.checkout_source == 'true'
+      uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+      with:
+        repository: ${{ inputs.source_repository != '' && inputs.source_repository || github.repository }}
+        ref: ${{ inputs.source_ref }}
+        path: ${{ inputs.source_path }}
+        submodules: ${{ inputs.source_submodules }}
+        persist-credentials: false
+
+    - name: Decide melange cache access
+      id: cache_policy
+      if: inputs.use_gha_cache == 'true'
+      shell: bash
+      env:
+        TRUSTED: ${{ inputs.trusted }}
+        EVENT_NAME: ${{ github.event_name }}
+        REF_TYPE: ${{ github.ref_type }}
+        REF_NAME: ${{ github.ref_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        restore=false
+        save=false
+        reason="untrusted-ref"
+        if [[ "$TRUSTED" == "true" ]]; then
+          restore=true
+          reason="trusted-restore-only"
+          if [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            save=true
+            reason="default-branch-read-write"
+          fi
+        elif [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then
+          restore=true
+          reason="internal-pr-restore-only"
+        elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+          reason="fork-pr-no-cache"
+        fi
+        {
+          echo "restore=$restore"
+          echo "save=$save"
+          echo "reason=$reason"
+        } >> "$GITHUB_OUTPUT"
+        echo "melange-cache policy: restore=$restore save=$save reason=$reason"
+
+    - name: Compute melange cache key
+      id: cache_key
+      if: inputs.use_gha_cache == 'true'
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        ARCH: ${{ inputs.arch }}
+        CARGO_PROFILE: ${{ inputs.cargo_profile }}
+        KEY_FILES: ${{ inputs.cache_key_files }}
+      run: |
+        set -euo pipefail
+        prefix="melange-v2-${PACKAGE}-${ARCH}-${CARGO_PROFILE:-none}."
+        key="$prefix"
+        if [ -n "$KEY_FILES" ]; then
+          IFS=',' read -ra paths <<< "$KEY_FILES"
+          hash_inputs=()
+          for path in "${paths[@]}"; do
+            path="${path#"${path%%[![:space:]]*}"}"
+            path="${path%"${path##*[![:space:]]}"}"
+            [ -n "$path" ] || continue
+            if [ ! -f "$path" ]; then
+              echo "cache key file missing: $path" >&2
+              exit 1
+            fi
+            hash_inputs+=("$path")
+          done
+          if [ "${#hash_inputs[@]}" -gt 0 ]; then
+            key="${key}$(sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
+          fi
+        fi
+        {
+          echo "prefix=$prefix"
+          echo "key=$key"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore melange cache
+      id: melange_cache
+      if: steps.cache_policy.outputs.restore == 'true'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: melange-cache
+        key: ${{ steps.cache_key.outputs.key }}
+        restore-keys: |
+          ${{ steps.cache_key.outputs.prefix }}
+
+    - name: Install melange
+      uses: chainguard-dev/actions/setup-melange@d3355cdd09c93e0d17b486406387cbb162a05134 # v1.6.15
+      with:
+        version: v0.50.8
+
+    - name: Prepare melange cache directory
+      shell: bash
+      run: mkdir -p melange-cache
+
+    - name: Compute source metadata
+      id: source_metadata
+      shell: bash
+      env:
+        SOURCE_PATH: ${{ inputs.source_path }}
+      run: |
+        set -euo pipefail
+        source_dir="${GITHUB_WORKSPACE}/${SOURCE_PATH}"
+        {
+          echo "commit=$(git -C "$source_dir" rev-parse HEAD)"
+          echo "date=$(git -C "$source_dir" show -s --format=%ct HEAD)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build melange package
+      shell: bash
+      env:
+        MELANGE_CONFIG: ${{ inputs.config }}
+        MELANGE_ARCH: ${{ inputs.arch }}
+        MELANGE_CARGO_PROFILE: ${{ inputs.cargo_profile }}
+        MELANGE_BUILD_VERSION: ${{ inputs.build_version }}
+        MELANGE_BUILD_ENV: ${{ inputs.build_env }}
+        SOURCE_PATH: ${{ inputs.source_path }}
+        SOURCE_COMMIT: ${{ steps.source_metadata.outputs.commit }}
+        SOURCE_DATE: ${{ steps.source_metadata.outputs.date }}
+      run: |
+        set -euo pipefail
+        metadata_env="${RUNNER_TEMP}/melange-build.env"
+        {
+          printf 'MELANGE_CARGO_PROFILE=%s\n' "$MELANGE_CARGO_PROFILE"
+          printf 'GIT_VERSION=%s\n' "$MELANGE_BUILD_VERSION"
+          printf 'GIT_COMMIT=%s\n' "$SOURCE_COMMIT"
+          printf 'GIT_DATE=%s\n' "$SOURCE_DATE"
+          printf 'BUILD_PROFILE=%s\n' "$MELANGE_CARGO_PROFILE"
+        } > "$metadata_env"
+        reserved="MELANGE_CARGO_PROFILE GIT_VERSION GIT_COMMIT GIT_DATE BUILD_PROFILE"
+        while IFS= read -r line; do
+          line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          [ -n "$line" ] || continue
+          if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            echo "build_env line is not KEY=VALUE" >&2
+            exit 1
+          fi
+          case " $reserved " in
+            *" ${line%%=*} "*)
+              echo "build_env may not set ${line%%=*}: it is derived by the build" >&2
+              exit 1
+              ;;
+          esac
+          printf '%s\n' "$line" >> "$metadata_env"
+        done <<< "$MELANGE_BUILD_ENV"
+        echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
+        sudo env "PATH=$PATH" \
+          melange build "$MELANGE_CONFIG" \
+          --arch "$MELANGE_ARCH" \
+          --out-dir "${GITHUB_WORKSPACE}/apk-packages" \
+          --source-dir "${GITHUB_WORKSPACE}/${SOURCE_PATH}" \
+          --cache-dir "${GITHUB_WORKSPACE}/melange-cache" \
+          --pipeline-dir "${GITHUB_WORKSPACE}/pipelines" \
+          --env-file "$metadata_env"
+
+    - name: Fix output permissions
+      shell: bash
+      run: sudo chown -R "$(id -u):$(id -g)" apk-packages melange-cache
+
+    - name: Save melange cache
+      if: steps.cache_policy.outputs.save == 'true' && steps.melange_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: melange-cache
+        key: ${{ steps.cache_key.outputs.key }}
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: apks-${{ inputs.package }}-${{ inputs.arch }}
+        path: apk-packages/
+        if-no-files-found: error
+        retention-days: 1

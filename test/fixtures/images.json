@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "registry": "us-docker.pkg.dev/oplabs-tools-artifacts/images",
+  "shared_paths": [
+    ".github/workflows/build-images.yaml",
+    "actions/**"
+  ],
+  "images": {
+    "selftest-docker": {
+      "builders": {
+        "docker": {
+          "context": "test/fixtures/docker",
+          "dockerfile": "Dockerfile"
+        }
+      },
+      "paths": ["test/fixtures/docker/**"],
+      "smoke": {"commands": ["/bin/sh -c true"]}
+    },
+    "selftest-apko": {
+      "builders": {
+        "apko": {
+          "config": "test/fixtures/apko/tiny.yaml"
+        }
+      },
+      "paths": ["test/fixtures/apko/**"],
+      "smoke": {"commands": ["/bin/sh -c true"]}
+    },
+    "selftest-dual": {
+      "builders": {
+        "docker": {
+          "context": "test/fixtures/docker",
+          "dockerfile": "Dockerfile"
+        },
+        "apko": {
+          "config": "test/fixtures/apko/tiny.yaml"
+        }
+      },
+      "primary": "docker",
+      "paths": ["test/fixtures/**"],
+      "smoke": {"commands": ["/bin/sh -c true"]}
+    }
+  }
+}

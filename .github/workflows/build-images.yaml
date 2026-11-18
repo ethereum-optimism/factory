@@ -1,0 +1,516 @@
+name: Build images (Reusable)
+
+# Builds Dockerfile and apko images from the caller's images catalog.
+# Untrusted runs (pull requests, merge groups, forks, other branches) build
+# amd64 images locally and smoke test them. Trusted runs (default branch
+# pushes, schedules, dispatches on the default branch, tags) also publish,
+# attest, and smoke test the arm64 digests.
+#
+# Every job checks out this repository at github.job_workflow_sha and runs the
+# composite actions from that checkout.
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: 'Path to the images catalog, relative to the repository root.'
+        required: false
+        type: string
+        default: '.github/images.json'
+      environment:
+        description: 'GitHub environment for the publish jobs. Its protection rules gate publishing.'
+        required: false
+        type: string
+        default: 'release'
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      trusted: ${{ steps.plan.outputs.trusted }}
+      is_release: ${{ steps.plan.outputs.is_release }}
+      has_packages: ${{ steps.plan.outputs.has_packages }}
+      has_builds: ${{ steps.plan.outputs.has_builds }}
+      has_publish: ${{ steps.plan.outputs.has_publish }}
+      has_manifest: ${{ steps.plan.outputs.has_manifest }}
+      has_smoke_arm64: ${{ steps.plan.outputs.has_smoke_arm64 }}
+      packages_matrix: ${{ steps.plan.outputs.packages_matrix }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
+      manifest_matrix: ${{ steps.plan.outputs.manifest_matrix }}
+      smoke_arm64_matrix: ${{ steps.plan.outputs.smoke_arm64_matrix }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Compute trust
+        id: trust
+        uses: ./.factory/actions/fork-context
+
+      - name: Plan images
+        id: plan
+        uses: ./.factory/actions/plan-images
+        with:
+          config: ${{ inputs.config }}
+          trusted: ${{ steps.trust.outputs.trusted }}
+
+  packages:
+    name: packages (${{ matrix.package }}, ${{ matrix.arch }})
+    needs: plan
+    if: needs.plan.outputs.has_packages == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.packages_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Build package
+        uses: ./.factory/actions/build-packages
+        with:
+          package: ${{ matrix.package }}
+          arch: ${{ matrix.arch }}
+          config: ${{ matrix.config }}
+          cargo_profile: ${{ matrix.cargo_profile }}
+          build_version: ${{ matrix.build_version }}
+          build_env: ${{ matrix.build_env }}
+          checkout_source: ${{ matrix.checkout_source }}
+          source_repository: ${{ matrix.source_repository }}
+          source_ref: ${{ matrix.source_ref }}
+          source_path: ${{ matrix.source_path }}
+          source_submodules: ${{ matrix.source_submodules }}
+          use_gha_cache: ${{ matrix.use_gha_cache }}
+          cache_key_files: ${{ matrix.cache_key_files }}
+          trusted: ${{ needs.plan.outputs.trusted }}
+
+  build:
+    name: build (${{ matrix.image }}, ${{ matrix.builder }})
+    needs: [plan, packages]
+    if: ${{ always() && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.has_builds == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Download APK artifacts
+        if: matrix.needs_packages != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: apks-*
+          path: ${{ runner.temp }}/apks
+
+      - name: Stage APK repositories
+        id: stage
+        if: matrix.needs_packages != ''
+        uses: ./.factory/actions/stage-packages
+        with:
+          packages: ${{ matrix.needs_packages }}
+          source: ${{ runner.temp }}/apks
+          destination: ${{ runner.temp }}/repos
+
+      - name: Build image
+        id: build
+        uses: ./.factory/actions/build-image
+        with:
+          builder: ${{ matrix.builder }}
+          image: ${{ matrix.image }}
+          local_ref: ${{ matrix.local_ref }}
+          mode: ${{ matrix.mode }}
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          build_args: ${{ matrix.build_args }}
+          bake_file: ${{ matrix.bake_file }}
+          set: ${{ matrix.set }}
+          config: ${{ matrix.config }}
+          repositories: ${{ steps.stage.outputs.repositories }}
+
+      - name: Smoke test
+        if: matrix.has_smoke
+        uses: ./.factory/actions/smoke-test
+        with:
+          image: ${{ steps.build.outputs.image }}
+          arch: amd64
+          commands: ${{ matrix.smoke_commands }}
+          script: ${{ matrix.smoke_script }}
+
+  publish:
+    name: publish (${{ matrix.id }})
+    needs: [plan, packages]
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_publish == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.publish_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Download APK artifacts
+        if: matrix.needs_packages != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: apks-*
+          path: ${{ runner.temp }}/apks
+
+      - name: Stage APK repositories
+        id: stage
+        if: matrix.needs_packages != ''
+        uses: ./.factory/actions/stage-packages
+        with:
+          packages: ${{ matrix.needs_packages }}
+          source: ${{ runner.temp }}/apks
+          destination: ${{ runner.temp }}/repos
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: oplabs-tools-artifacts
+          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get Artifact Registry token
+        id: ar_token
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.ar_token.outputs.token }}
+
+      - name: Build image for pre-push smoke test
+        id: local
+        if: matrix.smoke_local
+        uses: ./.factory/actions/build-image
+        with:
+          builder: ${{ matrix.builder }}
+          image: ${{ matrix.image }}
+          local_ref: ${{ matrix.local_ref }}
+          mode: ${{ matrix.mode }}
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          build_args: ${{ matrix.build_args }}
+          bake_file: ${{ matrix.bake_file }}
+          set: ${{ matrix.set }}
+          config: ${{ matrix.config }}
+          repositories: ${{ steps.stage.outputs.repositories }}
+
+      - name: Smoke test before push
+        if: matrix.smoke_local
+        uses: ./.factory/actions/smoke-test
+        with:
+          image: ${{ steps.local.outputs.image }}
+          arch: amd64
+          commands: ${{ matrix.smoke_commands }}
+          script: ${{ matrix.smoke_script }}
+          expected_version: ${{ matrix.expected_version }}
+
+      - name: Publish image
+        id: publish
+        uses: ./.factory/actions/publish-image
+        with:
+          kind: ${{ matrix.kind }}
+          registry: ${{ matrix.registry }}
+          image: ${{ matrix.image }}
+          sha_tag: ${{ matrix.sha_tag }}
+          ref_tag: ${{ matrix.ref_tag }}
+          id: ${{ matrix.id }}
+          registry_token: ${{ steps.ar_token.outputs.token }}
+          archs: ${{ matrix.archs }}
+          config: ${{ matrix.config }}
+          repositories: ${{ steps.stage.outputs.repositories }}
+          arch: ${{ matrix.arch }}
+          mode: ${{ matrix.mode }}
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          build_args: ${{ matrix.build_args }}
+          bake_file: ${{ matrix.bake_file }}
+          set: ${{ matrix.set }}
+
+      - name: Attest image provenance
+        if: matrix.kind == 'apko'
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ matrix.registry }}/${{ matrix.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+          show-summary: false
+
+      - name: Upload pushed digest
+        if: matrix.kind == 'docker-arch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushed-${{ matrix.id }}
+          path: ${{ runner.temp }}/${{ matrix.id }}.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload final digest
+        if: matrix.kind == 'apko'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: final-${{ matrix.id }}
+          path: ${{ runner.temp }}/${{ matrix.id }}.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-manifest:
+    name: manifest (${{ matrix.image }})
+    needs: [plan, publish]
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_manifest == 'true' && needs.publish.result == 'success' }}
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.manifest_matrix) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: oplabs-tools-artifacts
+          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get Artifact Registry token
+        id: ar_token
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.ar_token.outputs.token }}
+
+      - name: Download pushed digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: ${{ matrix.pushed_pattern }}
+          path: ${{ runner.temp }}/pushed
+          merge-multiple: true
+
+      - name: Create multi-arch manifest
+        id: manifest
+        uses: ./.factory/actions/publish-image
+        with:
+          kind: docker-manifest
+          registry: ${{ matrix.registry }}
+          image: ${{ matrix.image }}
+          sha_tag: ${{ matrix.sha_tag }}
+          ref_tag: ${{ matrix.ref_tag }}
+          id: ${{ matrix.id }}
+          digests_dir: ${{ runner.temp }}/pushed
+
+      - name: Attest manifest provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ matrix.registry }}/${{ matrix.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+          show-summary: false
+
+      - name: Upload final digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: final-${{ matrix.id }}
+          path: ${{ runner.temp }}/${{ matrix.id }}.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  smoke-arm64:
+    name: smoke arm64 (${{ matrix.id }})
+    needs: [plan, publish, publish-manifest]
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_smoke_arm64 == 'true' && needs.publish.result == 'success' && (needs.publish-manifest.result == 'success' || needs.publish-manifest.result == 'skipped') }}
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.smoke_arm64_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ethereum-optimism/factory
+          ref: ${{ github.job_workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: oplabs-tools-artifacts
+          workload_identity_provider: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+          create_credentials_file: true
+
+      - name: Get Artifact Registry token
+        id: ar_token
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.ar_token.outputs.token }}
+
+      - name: Download published digest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.final_artifact }}
+          path: ${{ runner.temp }}/final
+
+      - name: Read published digest
+        id: digest
+        shell: bash
+        env:
+          FINAL_DIR: ${{ runner.temp }}/final
+        run: |
+          set -euo pipefail
+          digest="$(cat "$FINAL_DIR"/*.txt | tr -d '[:space:]')"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test published digest
+        uses: ./.factory/actions/smoke-test
+        with:
+          image: ${{ matrix.registry }}/${{ matrix.image }}@${{ steps.digest.outputs.digest }}
+          arch: arm64
+          pull: true
+          commands: ${{ matrix.smoke_commands }}
+          script: ${{ matrix.smoke_script }}
+          expected_version: ${{ matrix.expected_version }}

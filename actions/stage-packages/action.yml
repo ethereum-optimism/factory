@@ -1,0 +1,60 @@
+name: 'Stage packages'
+description: >
+  Arrange downloaded apks-<package>-<arch> artifacts into one APK repository
+  per package and print the comma-separated repository list for apko -r.
+
+inputs:
+  packages:
+    description: 'Comma-separated package names an apko build needs.'
+    required: true
+  source:
+    description: 'Directory holding the downloaded apks-* artifact directories.'
+    required: true
+  destination:
+    description: 'Directory that receives one repository per package.'
+    required: true
+
+outputs:
+  repositories:
+    description: 'Comma-separated repository directories, in package order.'
+    value: ${{ steps.stage.outputs.repositories }}
+
+runs:
+  using: composite
+  steps:
+    - name: Stage APK repositories
+      id: stage
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        SOURCE_DIR: ${{ inputs.source }}
+        DEST_DIR: ${{ inputs.destination }}
+      run: |
+        set -euo pipefail
+        repos=()
+        IFS=',' read -ra names <<< "$PACKAGES"
+        for name in "${names[@]}"; do
+          name="${name//[[:space:]]/}"
+          [ -n "$name" ] || continue
+          dir="${DEST_DIR}/${name}"
+          mkdir -p "$dir"
+          found=0
+          for arch in x86_64 aarch64; do
+            artifact="${SOURCE_DIR}/apks-${name}-${arch}"
+            if [ -d "$artifact" ]; then
+              cp -R "$artifact"/. "$dir"/
+              found=1
+            fi
+          done
+          if [ "$found" != 1 ]; then
+            echo "::error::no apks artifacts found for package $name in $SOURCE_DIR" >&2
+            exit 1
+          fi
+          repos+=("$dir")
+        done
+        joined=""
+        for repo in "${repos[@]+"${repos[@]}"}"; do
+          joined="${joined:+$joined,}$repo"
+        done
+        echo "repositories=$joined" >> "$GITHUB_OUTPUT"
+        echo "staged repositories: ${joined:-none}"

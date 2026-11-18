@@ -1,0 +1,87 @@
+name: 'Smoke test'
+description: >
+  Run smoke commands and an optional script against one image. Verifies the
+  image architecture, runs each command with its entrypoint, and fails when
+  expected_version is set and no command reports it.
+
+inputs:
+  image:
+    description: 'Image reference to test: a local tag, or a registry reference with a digest.'
+    required: true
+  arch:
+    description: 'Docker architecture of the image: amd64 or arm64.'
+    required: true
+  pull:
+    description: '"true" to pull the image for the platform first, "false" for a locally loaded image.'
+    required: false
+    default: 'false'
+  commands:
+    description: 'JSON array of smoke commands. Each string is split on whitespace into entrypoint and arguments.'
+    required: false
+    default: '[]'
+  script:
+    description: 'Optional repository script run with IMAGE and IMAGE_ARCH set. Must exit 0.'
+    required: false
+    default: ''
+  expected_version:
+    description: 'Release version (for example v1.2.3) that at least one command must print. Empty disables the check.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Run smoke tests
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        IMAGE_ARCH: ${{ inputs.arch }}
+        PULL: ${{ inputs.pull }}
+        COMMANDS: ${{ inputs.commands }}
+        SCRIPT: ${{ inputs.script }}
+        EXPECTED_VERSION: ${{ inputs.expected_version }}
+      run: |
+        set -euo pipefail
+        if [ "$PULL" = "true" ]; then
+          docker pull --platform "linux/$IMAGE_ARCH" "$IMAGE"
+        fi
+
+        pulled_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
+        if [ "$pulled_arch" != "$IMAGE_ARCH" ]; then
+          echo "FAIL: $IMAGE is $pulled_arch but the test architecture is $IMAGE_ARCH" >&2
+          exit 1
+        fi
+
+        version_matched=false
+        normalized_version="${EXPECTED_VERSION#v}"
+        while IFS= read -r cmd; do
+          cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+          cmd="${cmd%"${cmd##*[![:space:]]}"}"
+          [ -n "$cmd" ] || continue
+          read -ra parts <<< "$cmd"
+          entrypoint="${parts[0]}"
+          args=("${parts[@]:1}")
+          echo "==> docker run --platform linux/$IMAGE_ARCH --entrypoint $entrypoint ... ${args[*]:-}"
+          set +e
+          output=$(docker run --rm --platform "linux/$IMAGE_ARCH" --entrypoint "$entrypoint" "$IMAGE" "${args[@]+"${args[@]}"}" 2>&1)
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          if [[ -n "$normalized_version" && "$output" == *"$normalized_version"* ]]; then
+            version_matched=true
+          fi
+          if [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] \
+            || { [ "$rc" -ge 129 ] && [ "$rc" -le 159 ]; }; then
+            echo "FAIL: $entrypoint could not run (exit $rc)"
+            exit 1
+          fi
+        done < <(jq -r '.[]' <<< "$COMMANDS")
+
+        if [[ -n "$normalized_version" && "$version_matched" != "true" ]]; then
+          echo "FAIL: no smoke command reported expected version $EXPECTED_VERSION" >&2
+          exit 1
+        fi
+
+        if [ -n "$SCRIPT" ]; then
+          IMAGE="$IMAGE" IMAGE_ARCH="$IMAGE_ARCH" bash "$SCRIPT"
+        fi

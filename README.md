@@ -35,6 +35,31 @@ and validate them with service-owned integration tests.
   setup needs only the image path; authentication, tag mapping, and waiting for
   the image build are handled centrally. See the [minimal caller](actions/release-notes/README.md#automatic-publishing-from-github-releases-recommended).
 
+## Unified image builds
+
+`.github/workflows/build-images.yaml` is a reusable workflow that builds and
+publishes the Dockerfile and apko images declared in a repository's catalog.
+The catalog format is in [docs/images-catalog.md](docs/images-catalog.md), and
+[templates/build-images.yaml](templates/build-images.yaml) is a minimal caller.
+Callers pin the workflow by full commit SHA and pass no secrets.
+
+The run is either trusted or untrusted, decided once by
+`actions/fork-context`:
+
+- Trusted: a push, schedule, or dispatch on the default branch, or a tag push.
+  These runs build, smoke test, push, and attest images. They also smoke test
+  the arm64 digest after publishing.
+- Untrusted: pull requests, merge groups, forks, and dispatches from other
+  branches. These runs plan only the affected images, build `amd64` images and
+  `x86_64` packages locally, and smoke test them. They have `contents: read`
+  only and no access to secrets or an OIDC token.
+
+The planner is `actions/plan-images`. The step actions are
+`actions/build-packages`, `actions/stage-packages`, `actions/build-image`,
+`actions/smoke-test`, and `actions/publish-image`. The self-test workflow
+`.github/workflows/build-images-selftest.yaml` runs the untrusted path on every
+pull request against the fixtures in `test/fixtures/`.
+
 ## `images.json`
 
 Consumer repos declare their images in `.github/images.json`:

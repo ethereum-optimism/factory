@@ -1,0 +1,70 @@
+name: 'Plan images'
+description: >
+  Plan the package, build, publish, manifest, and arm64 smoke matrices for
+  build-images.yaml from an images catalog. Reads a version 2 catalog, or a
+  legacy images.json merged with images.apko.json. On pull_request and push
+  only the images and packages affected by the diff are planned. Release tags
+  plan a single image. Untrusted plans are restricted to amd64 builds and
+  x86_64 packages and emit no publish legs.
+
+  Requires a checkout with fetch-depth 0 so the changed files can be computed.
+
+inputs:
+  config:
+    description: 'Path to the images catalog, relative to the repository root.'
+    required: false
+    default: '.github/images.json'
+  trusted:
+    description: '"true" or "false", from the trusted output of actions/fork-context.'
+    required: true
+
+outputs:
+  trusted:
+    description: '"true" when the run may publish.'
+    value: ${{ steps.plan.outputs.trusted }}
+  is_release:
+    description: '"true" when the plan came from a release tag.'
+    value: ${{ steps.plan.outputs.is_release }}
+  has_packages:
+    description: '"true" when any package legs are planned.'
+    value: ${{ steps.plan.outputs.has_packages }}
+  has_builds:
+    description: '"true" when any untrusted build legs are planned.'
+    value: ${{ steps.plan.outputs.has_builds }}
+  has_publish:
+    description: '"true" when any publish legs are planned.'
+    value: ${{ steps.plan.outputs.has_publish }}
+  has_manifest:
+    description: '"true" when any docker manifest legs are planned.'
+    value: ${{ steps.plan.outputs.has_manifest }}
+  has_smoke_arm64:
+    description: '"true" when any arm64 smoke legs are planned.'
+    value: ${{ steps.plan.outputs.has_smoke_arm64 }}
+  packages_matrix:
+    description: 'JSON array of package legs (one per package and architecture).'
+    value: ${{ steps.plan.outputs.packages_matrix }}
+  build_matrix:
+    description: 'JSON array of untrusted build legs (one per image and builder variant, amd64 only).'
+    value: ${{ steps.plan.outputs.build_matrix }}
+  publish_matrix:
+    description: 'JSON array of publish legs: one per docker architecture and one per apko variant.'
+    value: ${{ steps.plan.outputs.publish_matrix }}
+  manifest_matrix:
+    description: 'JSON array of docker multi-arch manifest legs, one per image.'
+    value: ${{ steps.plan.outputs.manifest_matrix }}
+  smoke_arm64_matrix:
+    description: 'JSON array of arm64 smoke legs that pull the published digest.'
+    value: ${{ steps.plan.outputs.smoke_arm64_matrix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan images
+      id: plan
+      shell: bash
+      env:
+        TRUSTED: ${{ inputs.trusted }}
+        CATALOG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+        "${GITHUB_ACTION_PATH}/plan-images.sh" "$CATALOG"
