@@ -78,6 +78,7 @@ the publish job completed.
 | `version` | yes | Must be `2`. A catalog without `version` is read as legacy (see below). |
 | `registry` | when publishing | Registry prefix, no trailing slash. Trusted runs fail when it is missing and there is something to publish. |
 | `tag_prefix` | no | Prefix on every published tag. Letters, digits, dot, dash. |
+| `default_branch_tags` | no | Alias tags, for example `latest`, published with the sha and ref tags on trusted default-branch runs. Letters, digits, dot, dash only. Default `[]`. See Default branch aliases. |
 | `release` | no | Release tag mapping (see below). |
 | `shared_paths` | no | Changed-file patterns that plan every image and package. |
 | `packages` | no | Melange packages (see below). Names match `^[a-z0-9][a-z0-9._-]*$`. |
@@ -127,7 +128,7 @@ standard hosted runner regardless of `runner_profile`.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `config` | `melange/<name>.yaml` | Melange configuration path. |
-| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. |
+| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. Builders take the same key, see Images and builders. |
 | `source` | none | Repository checked out before the build, with `repository`, `ref`, `path`, `root`. Omit `repository` to check out the calling repository. |
 | `source.root` | `true` when `path` is `"."`, else `false` | Builds as if the checkout were the workspace root. The melange configuration, the pipelines directory, `cache_key_files` and the source directory resolve inside the checkout instead of the calling repository. Not valid for the calling repository checkout. |
 | `source_submodules` | `"false"` | `"false"`, `"true"`, or `"recursive"`. Submodules of the `source` checkout. |
@@ -155,6 +156,11 @@ secrets and no OIDC token.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
+- `runner_profile`: `standard` (default) or `large`, as for packages. Selects
+  the runner of this builder's publish legs on trusted runs, per architecture.
+  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
+  profile. Untrusted runs ignore it and use the standard runner.
+- `events`: contexts in which the builder is planned. See Builder events.
 
 ko mode fields (`dockerfile`, `target`, `build_args`, `bake_file`, and `set` do
 not apply to ko):
@@ -185,6 +191,11 @@ the same way a Dockerfile pulls `FROM`.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
+- `runner_profile`: `standard` (default) or `large`, as for packages. Selects
+  the runner of this builder's publish legs on trusted runs, per architecture.
+  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
+  profile. Untrusted runs ignore it and use the standard runner.
+- `events`: contexts in which the builder is planned. See Builder events.
 
 When an image has both builders, `primary` is required. Other image fields:
 
@@ -193,6 +204,7 @@ When an image has both builders, `primary` is required. Other image fields:
 - `smoke`: `commands` (each string split on whitespace into entrypoint and
   arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
   `verify_version` (on release tags, a command must print the version).
+- `default_branch_tags`: overrides the top-level list for this image. An empty array publishes no alias tags for this image.
 
 Resolution order for each builder's architectures: the builder's `archs`, then
 the image `archs`, then both architectures. Example: an image still built with
@@ -225,6 +237,42 @@ PATH while the Dockerfile image ships `/bin/tool`:
 }
 ```
 
+### Builder events
+
+`events` is an array of contexts. Each value is one of:
+
+- `pull_request`: pull requests, and merge queue builds (`merge_group`);
+- `push`: every push event, including pushes to a branch other than the default branch (those run untrusted);
+- `schedule`;
+- `release`: runs on a release tag;
+- `workflow_dispatch`.
+
+The default is all five, so a builder without `events` is planned in every
+context. The context of a run is `release` on a tag ref. Otherwise it is the
+event name, with `pull_request`, `pull_request_target`, and `merge_group` all
+mapped to `pull_request`. An empty array, an unknown value, or a value that is
+not a string fails the plan.
+
+A builder is planned only when its `events` include the context. An image with
+no builder planned for the context is skipped without error. Packages are
+planned as before, from the images that remain and from changed package files.
+
+The primary builder stays the one named by `primary`, even when it is filtered
+out. The other builder keeps the tag prefix it has when both run. For example,
+with `primary` set to `docker` and the docker builder filtered out on a push,
+the apko builder still publishes `apko-<sha>`:
+
+```json
+"api": {
+  "builders": {
+    "docker": {"dockerfile": "api/Dockerfile", "runner_profile": "large", "events": ["release", "workflow_dispatch"]},
+    "apko": {"config": "apko/api.yaml"}
+  },
+  "primary": "docker",
+  "smoke": {"commands": ["api --version"]}
+}
+```
+
 ## Tags
 
 For a builder, the tag prefix is:
@@ -244,6 +292,16 @@ Published tags for a prefix `P`:
 - apko variants append their `tag_suffix` to both tags.
 - Docker images are pushed by digest per architecture, then merged into a
   manifest list under those tags.
+
+### Default branch aliases
+
+The top-level `default_branch_tags` (or the image's own list) names alias tags such as
+`latest`. On a trusted run whose ref is the default branch, each alias is published for
+every builder of the image, next to the sha and ref tags: `P<alias>`, with the apko
+variant `tag_suffix` appended. For example, a primary docker builder publishes
+`latest`, and an apko builder with `tag_prefix` `apko-` publishes `apko-latest`.
+Aliases are never published on untrusted runs, on release tags, or on other branches.
+Without the key, nothing changes.
 
 ## Trusted and untrusted runs
 

@@ -73,6 +73,8 @@ def kv_obj:
     | add // {}
   end;
 
+def build_events: ["pull_request", "push", "schedule", "release", "workflow_dispatch"];
+
 def apko_arch_name:
   if . == "x86_64" then "amd64" elif . == "aarch64" then "arm64" else . end;
 
@@ -151,7 +153,9 @@ def norm_builders($n; $b):
           ldflags: ($b.docker.ldflags // []),
           env: ($b.docker.env // []),
           tag_prefix: ($b.docker.tag_prefix // null),
-          archs: ($b.docker.archs // null)
+          archs: ($b.docker.archs // null),
+          runner_profile: (if ($b.docker | has("runner_profile")) then $b.docker.runner_profile else "standard" end),
+          events: (if ($b.docker | has("events")) then $b.docker.events else build_events end)
         }} else {} end)
     + (if $b.apko then {apko: {
           needs_packages: ($b.apko.needs_packages // []),
@@ -159,7 +163,9 @@ def norm_builders($n; $b):
           configs: (if ($b.apko.configs // null) != null then
                       [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // "")}]
                     else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end),
-          archs: ($b.apko.archs // null)
+          archs: ($b.apko.archs // null),
+          runner_profile: (if ($b.apko | has("runner_profile")) then $b.apko.runner_profile else "standard" end),
+          events: (if ($b.apko | has("events")) then $b.apko.events else build_events end)
         }} else {} end);
 
 def norm_smoke($s):
@@ -190,6 +196,12 @@ def norm_image($n):
       else (.builders | keys)[0]
       end);
 
+def tag_list($what):
+  if type != "array" then error("\($what) must be an array of tag names") else . end
+  | if any(.[]; (type != "string") or (test("^[a-zA-Z0-9.-]+$") | not))
+      then error("\($what) entries must be non-empty and contain only letters, digits, dot, dash") else . end
+  | reduce .[] as $t ([]; if any(.[]; . == $t) then . else . + [$t] end);
+
 def validate_image($n; $pkgs):
   . as $i
   | if ($n | test("^[a-z0-9][a-z0-9._-]*$")) | not
@@ -200,6 +212,14 @@ def validate_image($n; $pkgs):
       then error("image \($n): primary \($i.primary) has no matching builder") else . end
   | if ([(.builders | to_entries[]) | (.value.tag_prefix // "") | select(test("^[a-zA-Z0-9.-]*$") | not)] | length) > 0
       then error("image \($n): builders tag_prefix may only contain letters, digits, dot, dash") else . end
+  | ([(.builders | to_entries[]) | select(is_one_of(.value.runner_profile; ["standard", "large"]) | not) | .key]) as $bad_runner
+  | if ($bad_runner | length) > 0
+      then error("image \($n): builders.\($bad_runner[0]).runner_profile must be standard or large") else . end
+  | ([(.builders | to_entries[])
+      | select((.value.events | type) != "array" or (.value.events | length) == 0 or any(.value.events[]; is_one_of(.; build_events) | not))
+      | .key]) as $bad_events
+  | if ($bad_events | length) > 0
+      then error("image \($n): builders.\($bad_events[0]).events must be a non-empty array of pull_request, push, schedule, release, workflow_dispatch") else . end
   | if ($i.archs | length) == 0 or ([$i.archs[] | select(is_one_of(.; ["amd64", "arm64"]) | not)] | length) > 0
       then error("image \($n): archs must be a non-empty subset of amd64, arm64") else . end
   | ([(.builders | to_entries[])
@@ -239,6 +259,7 @@ def normalize_v2:
   | if (((.tag_prefix // "") | tostring) | test("^[a-zA-Z0-9.-]*$")) | not
       then error("tag_prefix may only contain letters, digits, dot, dash") else . end
   | . as $c
+  | (if $c | has("default_branch_tags") then ($c.default_branch_tags | tag_list("default_branch_tags")) else [] end) as $top_tags
   | (reduce (($c.packages // {}) | to_entries[]) as $e ({};
         .[$e.key] = ($e.value | norm_package($e.key) | validate_package($e.key)))) as $pkgs
   | ($pkgs | keys) as $pkgnames
@@ -246,6 +267,7 @@ def normalize_v2:
       version: 2,
       registry: ($c.registry // ""),
       tag_prefix: ($c.tag_prefix // ""),
+      default_branch_tags: $top_tags,
       release: ({
           tag_regex: "^([^/]+)/(v.+)$",
           service_match: 1,
@@ -258,7 +280,10 @@ def normalize_v2:
       packages: $pkgs,
       hooks: {pre_build: ($c.hooks.pre_build // "")},
       images: (reduce (($c.images // {}) | to_entries[]) as $e ({};
-          .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames))))
+          .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames)
+            | . + {default_branch_tags: (if ($e.value | has("default_branch_tags"))
+                then ($e.value.default_branch_tags | tag_list("images.\($e.key).default_branch_tags"))
+                else $top_tags end)})))
     }
   | if (.release.tag_regex | type) != "string" then error("release.tag_regex must be a string") else . end
   | if (.hooks.pre_build | type) != "string" then error("hooks.pre_build must be a string") else . end;
@@ -343,6 +368,9 @@ def runner_for($profile; $arch):
   elif $profile == "large" and $arch == "aarch64" then "oplabs-ubuntu-arm"
   else error("unsupported runner profile or architecture: \($profile) \($arch)") end;
 
+def builder_runner($b; $arch):
+  runner_for($b.runner_profile; if $arch == "amd64" then "x86_64" else "aarch64" end);
+
 def sanitize_ref: gsub("[^a-zA-Z0-9.]"; "-");
 def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
 def has_smoke($s): (($s.commands | length) > 0) or ($s.script != "");
@@ -366,6 +394,8 @@ def ko_fields($hook; $d; $ver): if $d.mode == "ko" then {
     ldflags: ($d.ldflags | join("\n")),
     env: pkg_env(merge_args($hook; {}); (release_env($d.env; $ver) | join("\n")))
   } else {} end;
+def alias_tags_for($on; $tags; $prefix; $sfx): if $on then ($tags | map($prefix + . + $sfx)) else [] end;
+def with_alias($tags): if ($tags | length) > 0 then . + {alias_tags: ($tags | join(","))} else . end;
 JQ
 
 # Normalize the catalog into the version 2 model at $MODEL.
@@ -649,6 +679,46 @@ plan_changed() {
   mapfile -t SELECT_PACKAGES < <(printf '%s\n' "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}" | sed '/^$/d' | sort -u)
 }
 
+plan_context() {
+  if [[ "$REF_TYPE" == "tag" ]]; then
+    echo "release"
+    return 0
+  fi
+  case "$EVENT_NAME" in
+    pull_request|pull_request_target|merge_group) echo "pull_request" ;;
+    *) echo "$EVENT_NAME" ;;
+  esac
+}
+
+# Keeps the builders whose events include the context and drops selected images left with none.
+filter_builders_by_context() {
+  local context="$1" n b kept=()
+  for n in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+    [[ -n "$n" ]] || continue
+    while IFS= read -r b; do
+      [[ -n "$b" ]] || continue
+      echo "::notice::Image $n builder $b is not planned for the $context context"
+    done < <(jq -r --arg n "$n" --arg ctx "$context" \
+      '.images[$n].builders | to_entries[] | select(.value.events | index($ctx) | not) | .key' "$MODEL")
+  done
+  jq -c --arg ctx "$context" \
+    '.images |= with_entries(.value.builders |= with_entries(select(.value.events | index($ctx))))' \
+    "$MODEL" > "$WORK/model-context.json"
+  mv "$WORK/model-context.json" "$MODEL"
+  for n in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+    [[ -n "$n" ]] || continue
+    if jq -e --arg n "$n" '(.images[$n].builders | length) > 0' "$MODEL" >/dev/null; then
+      kept+=("$n")
+    else
+      echo "::notice::Image $n has no builder planned for the $context context; skipped"
+    fi
+  done
+  SELECT_IMAGES=()
+  for n in "${kept[@]+"${kept[@]}"}"; do
+    SELECT_IMAGES+=("$n")
+  done
+}
+
 to_json_array() {
   printf '%s\n' "$@" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique'
 }
@@ -681,6 +751,8 @@ main() {
     load_all
   fi
 
+  filter_builders_by_context "$(plan_context)"
+
   if [[ "$TRUSTED" != "true" ]]; then
     local skipped_name
     for skipped_name in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
@@ -693,6 +765,11 @@ main() {
         done < <(jq -r --arg n "$skipped_name" '.images[$n].builders | to_entries[] | select(.value.archs | index("amd64") | not) | .key' "$MODEL")
       fi
     done
+  fi
+
+  local default_branch_run=false
+  if [[ "$TRUSTED" == "true" && "$REF_TYPE" == "branch" ]]; then
+    default_branch_run=true
   fi
 
   local images_json packages_json
@@ -708,6 +785,7 @@ main() {
     --argjson images "$images_json" \
     --argjson pkgs "$packages_json" \
     --argjson trusted "$TRUSTED" \
+    --argjson alias_on "$default_branch_run" \
     --argjson hook "$hook_kv" \
     --arg sha "$HEAD_SHA" \
     --arg ref_name "$PUBLISH_TAG" \
@@ -798,7 +876,7 @@ main() {
                     builder: "docker",
                     kind: "docker-arch",
                     arch: $a,
-                    runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
+                    runner: builder_runner($i.builders.docker; $a),
                     mode: $i.builders.docker.mode,
                     context: $i.builders.docker.context,
                     dockerfile: $i.builders.docker.dockerfile,
@@ -822,7 +900,7 @@ main() {
                       kind: "apko",
                       arch: "",
                       archs: ($i.builders.apko.archs | join(",")),
-                      runner: "ubuntu-24.04",
+                      runner: builder_runner($i.builders.apko; "amd64"),
                       mode: "",
                       context: "",
                       dockerfile: "",
@@ -836,7 +914,7 @@ main() {
                       sha_tag: (prefix_for($m; $i; "apko") + $sha + $v.tag_suffix),
                       ref_tag: (prefix_for($m; $i; "apko") + ($ref_name | sanitize_ref) + $v.tag_suffix),
                       registry: $m.registry
-                    }
+                    } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "apko"); $v.tag_suffix))
                 ] else [] end)
               + (if $i.builders.docker and $i.builders.docker.mode == "ko" then [{
                   id: "\($n)-ko",
@@ -845,7 +923,7 @@ main() {
                   kind: "ko",
                   arch: "",
                   archs: ($i.builders.docker.archs | join(",")),
-                  runner: "ubuntu-24.04",
+                  runner: builder_runner($i.builders.docker; "amd64"),
                   mode: "ko",
                   context: $i.builders.docker.context,
                   dockerfile: "",
@@ -859,7 +937,7 @@ main() {
                   sha_tag: (prefix_for($m; $i; "docker") + $sha),
                   ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                   registry: $m.registry
-                } + ko_fields($hook; $i.builders.docker; $version)] else [] end)
+                } + ko_fields($hook; $i.builders.docker; $version) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
             ) | .[]
           end
         ]) as $publish
@@ -875,7 +953,7 @@ main() {
                 ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                 pushed_pattern: "pushed-\($n)-docker-*",
                 final_artifact: "final-\($n)-docker"
-              }
+              } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))
           end
         ]) as $manifest
       | ([ if $trusted | not then empty else

@@ -91,4 +91,11 @@ expected_auth="$(printf 'oauth2accesstoken:fake-token-123' | base64 | tr -d '\n'
 jq -e --arg a "$expected_auth" '.auths["us-docker.pkg.dev"].auth == $a' "$CONFIG" > /dev/null \
   || fail "refresh did not write the registry host auths entry"
 
+grep -q -F "KO_ALIAS_TAGS" "$ACTION" \
+  || fail "alias tags are not passed to the ko publish path"
+grep -q -F "APKO_ALIAS_TAGS" "$ACTION" \
+  || fail "alias tags are not passed to the apko publish path"
+grep -q -F "tag_args+=(-t \"\${name}:\${alias_tag}\")" "$ACTION" \
+  || fail "alias tags are not added to the manifest list tags"
+
 echo "publish-image registry auth: credential helper, apko token and attest refresh checks passed"
