@@ -84,11 +84,17 @@ def is_one_of($v; $xs): any($xs[]; . == $v);
 
 def norm_package($k):
   (if . == null then {} else . end) as $c
+  | ($c.source // null) as $s
+  | ($ENV.GITHUB_REPOSITORY // "") as $caller
+  | (if $s != null and $caller != "" and ((($s.repository // "") == "") or ($s.repository == $caller))
+        and (($s.path // ".") == ".") and (($s.ref // "") == "")
+     then true else false end) as $self
   | {
       config: ($c.config // ("melange/" + $k + ".yaml")),
       runner_profile: (if ($c | has("runner_profile")) then $c.runner_profile else "standard" end),
-      source: ($c.source // null),
-      source_submodules: (($c.source_submodules // "false") | tostring),
+      source: (if $self then null else $s end),
+      source_submodules: (if $self then "false" else (($c.source_submodules // "false") | tostring) end),
+      submodules: ((if $self then ($c.submodules // $c.source_submodules) else $c.submodules end) // "false" | tostring),
       use_gha_cache: ($c.use_gha_cache // false),
       cache_key_files: ($c.cache_key_files // []),
       archs: ($c.archs // ["x86_64", "aarch64"]),
@@ -108,7 +114,11 @@ def validate_package($k):
   | if ([.archs[] | select(is_one_of(.; ["x86_64", "aarch64"]) | not)] | length) > 0 or (.archs | length) == 0
     then error("packages.\($k).archs must be a non-empty subset of x86_64, aarch64") else . end
   | if .source != null and ((.source.path // ".") == ".")
-    then error("packages.\($k).source.path must be a subdirectory, not '.', so the checkout does not clean the workspace") else . end;
+    then error("packages.\($k).source.path must be a subdirectory, not '.', so the checkout does not clean the workspace") else . end
+  | if is_one_of(.submodules; ["false", "true", "recursive"]) | not
+    then error("packages.\($k).submodules must be false, true, or recursive") else . end
+  | if .submodules != "false" and .source != null
+    then error("packages.\($k).submodules applies only to the calling repository checkout; use source_submodules for a source") else . end;
 
 def norm_builders($n; $b):
   if ($b | type) != "object" then error("image \($n): builders must be an object") else . end
@@ -755,7 +765,7 @@ main() {
       | ([ $pkgs[] as $p
           | $m.packages[$p] as $c
           | (if $trusted then $c.archs else [$c.archs[] | select(. == "x86_64")] end)[] as $arch
-          | {
+          | ({
               id: "\($p)-\($arch)",
               package: $p,
               arch: $arch,
@@ -771,7 +781,7 @@ main() {
               cargo_profile: (if $trusted then $c.cargo_profile.trusted else $c.cargo_profile.untrusted end),
               build_env: pkg_env(merge_args($hook; {}); $c.build_env),
               build_version: (if $version != "" then $version else $c.build_version end)
-            }
+            } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end))
         ]) as $packages
       | ([ if $trusted then empty else
             $images[] as $n
