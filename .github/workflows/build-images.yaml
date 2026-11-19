@@ -114,6 +114,7 @@ jobs:
       - name: Checkout caller repository
         uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
         with:
+          submodules: ${{ matrix.caller_submodules || 'false' }}
           persist-credentials: false
 
       - name: Require the factory pin

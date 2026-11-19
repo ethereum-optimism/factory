@@ -104,7 +104,7 @@
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Source repository checked out before the build. path must be a subdirectory, not '.'.",
+          "description": "Source repository checked out before the build. path must be a subdirectory, except '.' for the calling repository without ref, which plans as the calling repository checkout.",
           "properties": {
             "repository": {
               "type": "string",
@@ -114,10 +114,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string",
-              "not": {
-                "const": "."
-              }
+              "type": "string"
             }
           }
         },
@@ -127,6 +124,16 @@
             "true",
             "recursive"
           ]
+        },
+        "submodules": {
+          "enum": [
+            false,
+            true,
+            "false",
+            "true",
+            "recursive"
+          ],
+          "description": "Submodule checkout of the calling repository, for a package with no source or built from the calling repository at the root (source omitted). Defaults to false."
         },
         "use_gha_cache": {
           "type": "boolean"
