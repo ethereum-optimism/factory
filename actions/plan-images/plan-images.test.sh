@@ -1099,16 +1099,73 @@ jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "pat
 expect_plan_error sub_with_other_source "$other_sub" "submodules applies only to the calling repository checkout" \
   "$CALLER" TRUSTED=true
 
+# Other-repository path "." is built as a source checkout under .package-sources/<package>
+# with source.root, so the checkout never replaces the caller's workspace.
+ROOT_DIR=.package-sources/stack
+
 other_root="$TEST_DIR/sub-other-root.json"
 jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "."}}' "$sub_base" > "$other_root"
-expect_plan_error sub_other_root "$other_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
+run_plan sub_other_root "$other_root" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'true'
+assert_json "$(matrix packages_matrix)" '.[0].source_repository' 'ethereum-optimism/other'
+assert_json "$(matrix packages_matrix)" '.[0].source_path' "$ROOT_DIR"
+assert_json "$(matrix packages_matrix)" '.[0].build_dir' "$ROOT_DIR"
+assert_json "$(matrix packages_matrix)" '.[0] | has("caller_submodules")' 'false'
 
 pinned_root="$TEST_DIR/sub-pinned-root.json"
 jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": ".", "ref": "v1.0.0"}}' \
   "$sub_base" > "$pinned_root"
-expect_plan_error sub_pinned_root "$pinned_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
+run_plan sub_pinned_root "$pinned_root" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'true'
+assert_json "$(matrix packages_matrix)" '.[0].source_ref' 'v1.0.0'
+assert_json "$(matrix packages_matrix)" '.[0].source_path' "$ROOT_DIR"
+assert_json "$(matrix packages_matrix)" '.[0].build_dir' "$ROOT_DIR"
 
-expect_plan_error sub_no_repo_env "$sub_self" "must be a subdirectory, not '.'" TRUSTED=true
+run_plan sub_no_repo_env "$sub_self" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'true'
+assert_json "$(matrix packages_matrix)" '.[0].source_path' "$ROOT_DIR"
+assert_json "$(matrix packages_matrix)" '.[0].build_dir' "$ROOT_DIR"
+
+# Legacy v1 catalog with an other-repository path "." is built as a root source.
+legacy_other_apko="$TEST_DIR/legacy-other-apko.json"
+write_legacy_apko "$legacy_other_apko"
+jq '.melange.stack += {"source": {"repository": "ethereum-optimism/other", "path": "."}, "source_submodules": "recursive"}' \
+  "$legacy_other_apko" > "$legacy_other_apko.tmp" && mv "$legacy_other_apko.tmp" "$legacy_other_apko"
+run_plan legacy_other "$legacy_doc" "$CALLER" LEGACY_APKO_CONFIG="$legacy_other_apko" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].build_dir' "$ROOT_DIR"
+assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].source_submodules' 'recursive'
+assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0] | has("caller_submodules")' 'false'
+
+# An explicit root on a subdirectory checkout builds from that subdirectory.
+root_subdir="$TEST_DIR/root-subdir.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "tools", "root": true}}' \
+  "$sub_base" > "$root_subdir"
+run_plan root_subdir "$root_subdir" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].source_path' 'tools'
+assert_json "$(matrix packages_matrix)" '.[0].build_dir' 'tools'
+
+# A subdirectory source without root keeps the workspace as the build directory.
+plain_subdir="$TEST_DIR/plain-subdir.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "tools", "root": false}}' \
+  "$sub_base" > "$plain_subdir"
+run_plan plain_subdir "$plain_subdir" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].source_path' 'tools'
+assert_json "$(matrix packages_matrix)" '.[0] | has("build_dir")' 'false'
+
+root_false_root="$TEST_DIR/root-false-root.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": ".", "root": false}}' \
+  "$sub_base" > "$root_false_root"
+expect_plan_error root_false_root "$root_false_root" "needs source.root: true" "$CALLER" TRUSTED=true
+
+root_not_bool="$TEST_DIR/root-not-bool.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "tools", "root": "yes"}}' \
+  "$sub_base" > "$root_not_bool"
+expect_plan_error root_not_bool "$root_not_bool" "source.root must be true or false" "$CALLER" TRUSTED=true
+
+root_self="$TEST_DIR/root-self.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": ".", "root": true}}' \
+  "$sub_base" > "$root_self"
+expect_plan_error root_self "$root_self" "does not apply to the calling repository checkout" "$CALLER" TRUSTED=true
 
 # --- Per-builder runner and event filter ------------------------------------------
 

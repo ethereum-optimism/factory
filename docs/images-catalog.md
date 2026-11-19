@@ -129,7 +129,8 @@ standard hosted runner regardless of `runner_profile`.
 | --- | --- | --- |
 | `config` | `melange/<name>.yaml` | Melange configuration path. |
 | `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. Builders take the same key, see Images and builders. |
-| `source` | none | Repository checked out before the build, with `repository`, `ref`, `path`. `path` must be a subdirectory, never `.`. Omit `repository` to check out the calling repository. |
+| `source` | none | Repository checked out before the build, with `repository`, `ref`, `path`, `root`. Omit `repository` to check out the calling repository. |
+| `source.root` | `true` when `path` is `"."`, else `false` | Builds as if the checkout were the workspace root. The melange configuration, the pipelines directory, `cache_key_files` and the source directory resolve inside the checkout instead of the calling repository. Not valid for the calling repository checkout. |
 | `source_submodules` | `"false"` | `"false"`, `"true"`, or `"recursive"`. Submodules of the `source` checkout. |
 | `submodules` | `false` | `false`, `true`, or `"recursive"`. Submodules of the calling repository checkout. Only valid when `source` is omitted. Public submodules over https are fetched without credentials. A private submodule needs the app-token mechanism on trusted runs only, and such a package must not depend on it in untrusted runs. |
 | `use_gha_cache` | `false` | Restores the melange cache. Saves it only on trusted default-branch runs. |
@@ -139,7 +140,7 @@ standard hosted runner regardless of `runner_profile`.
 | `build_env` | `""` | `KEY=VALUE` lines added to the melange environment. |
 | `build_version` | `""` | Exported as `GIT_VERSION`. Release tags override it. |
 
-A `source` with `repository` set to the calling repository, `path` `"."`, and no `ref` is the calling repository checkout. It plans as an omitted `source`, and its `source_submodules` maps to `submodules`. Legacy v1 catalogs follow the same rule. A `source` with `path` `"."` for any other repository is rejected.
+A `source` with `repository` set to the calling repository, `path` `"."`, and no `ref` is the calling repository checkout. It plans as an omitted `source`, and its `source_submodules` maps to `submodules`. Legacy v1 catalogs follow the same rule. A `source` with `path` `"."` for any other repository, or with a `ref` on the calling repository, is checked out under `.package-sources/<package>` with `root` set, so the checkout never replaces the calling repository's files. `root: false` with `path` `"."` is rejected.
 
 Package artifacts are named `apks-<package>-<arch>`. The package build uses no
 secrets and no OIDC token.
