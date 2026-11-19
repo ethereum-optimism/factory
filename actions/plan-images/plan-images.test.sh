@@ -563,6 +563,15 @@ fi
 
 run_plan untrusted_large "$large" TRUSTED=false
 assert_json "$(matrix packages_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
+assert_json "$(matrix packages_matrix)" '[.[].free_disk] | unique | join(",")' 'true'
+
+# free_disk is only present for large packages on untrusted runs.
+assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'true'
+run_plan untrusted_standard "$v2" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+  GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'false'
+run_plan trusted_large "$large" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'false'
 grep -q '^::notice::Image widget has no amd64 architecture' "$TEST_DIR/untrusted_arm.log" \
   || fail "missing untrusted skip notice"
 grep -q "^::notice::Release tag 'not-a-release' does not match" "$TEST_DIR/invalid_tag.log" \

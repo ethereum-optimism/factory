@@ -144,7 +144,9 @@ names the tag.
 
 Each entry under `packages` describes one melange build. A package is built
 once per architecture in `archs`. Untrusted runs build `x86_64` only, on the
-standard hosted runner regardless of `runner_profile`.
+standard hosted runner regardless of `runner_profile`. Before a `large` package
+builds there, the runner removes preinstalled toolchains the build does not use
+and prunes its Docker images, to leave room on the root filesystem.
 
 | Field | Default | Meaning |
 | --- | --- | --- |

@@ -43,6 +43,9 @@ jobs:
       - name: Test build-packages build directory resolution
         run: actions/build-packages/resolve-build-root.test.sh
 
+      - name: Test build-packages free disk script
+        run: actions/build-packages/free-disk.test.sh
+
       - name: Test publish-image bake overrides
         run: actions/publish-image/publish-image.test.sh
 

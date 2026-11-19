@@ -165,6 +165,7 @@ jobs:
           use_gha_cache: ${{ matrix.use_gha_cache }}
           cache_key_files: ${{ matrix.cache_key_files }}
           trusted: ${{ needs.plan.outputs.trusted }}
+          free_disk: ${{ matrix.free_disk }}
 
   build:
     name: build (${{ matrix.image }}, ${{ matrix.builder }})
