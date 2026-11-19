@@ -923,6 +923,193 @@ assert_eq "$(out_value "$OUT" selected_images)" "" "negated sub-path inside a po
 neg_change shared go.mod
 assert_eq "$(out_value "$OUT" selected_images)" "svc,web" "positive shared path still plans the full catalog"
 
+# --- Default-branch alias tags -----------------------------------------------
+
+alias_cat="$TEST_DIR/alias.json"
+cat > "$alias_cat" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "default_branch_tags": ["latest"],
+  "packages": {
+    "stack": {"config": "melange/stack.yaml", "archs": ["x86_64", "aarch64"]}
+  },
+  "images": {
+    "both": {
+      "builders": {
+        "docker": {"dockerfile": "Dockerfile"},
+        "apko": {
+          "needs_packages": ["stack"],
+          "configs": [
+            {"config": "apko/both.yaml", "tag_suffix": ""},
+            {"config": "apko/both-dev.yaml", "tag_suffix": "-dev"}
+          ]
+        }
+      },
+      "primary": "docker",
+      "paths": ["both/**"],
+      "smoke": {"commands": ["/bin/sh -c true"]}
+    },
+    "solo": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["solo/**"],
+      "default_branch_tags": ["stable", "latest"]
+    },
+    "optout": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["optout/**"],
+      "default_branch_tags": []
+    }
+  }
+}
+JSON
+
+run_plan alias_main "$alias_cat" TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "both-apko") | .alias_tags] | join(",")' 'apko-latest'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "both-apko-dev") | .alias_tags] | join(",")' 'apko-latest-dev'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "both-docker") | .alias_tags] | join(",")' 'latest'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "solo-docker") | .alias_tags] | join(",")' 'stable,latest'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "optout-docker") | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "solo-docker") | .ref_tag] | join(",")' 'main'
+
+run_plan alias_feature "$alias_cat" TRUSTED=false GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/feature \
+  GITHUB_REF_NAME=feature GITHUB_REF_TYPE=branch
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+run_plan alias_release "$alias_cat" TRUSTED=true GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/solo/v1.2.3 \
+  GITHUB_REF_NAME=solo/v1.2.3 GITHUB_REF_TYPE=tag
+assert_json "$(matrix manifest_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+assert_json "$(matrix publish_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '.[0].ref_tag' 'solo-v1.2.3'
+
+run_plan alias_untrusted "$alias_cat" TRUSTED=false GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/9/merge \
+  GITHUB_REF_NAME=9/merge GITHUB_REF_TYPE=branch
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+# A catalog without the key and one with an empty list plan the same outputs.
+no_key="$TEST_DIR/no-key.json"
+empty_key="$TEST_DIR/empty-key.json"
+jq 'del(.default_branch_tags) | del(.images[].default_branch_tags)' "$alias_cat" > "$no_key"
+jq '.default_branch_tags = [] | del(.images[].default_branch_tags)' "$alias_cat" > "$empty_key"
+run_plan no_key "$no_key" TRUSTED=true
+cp "$OUT" "$TEST_DIR/no-key.plan"
+run_plan empty_key "$empty_key" TRUSTED=true
+cmp -s "$TEST_DIR/no-key.plan" "$OUT" || fail "empty default_branch_tags changed the planned outputs"
+assert_json "$(matrix publish_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+
+for bad in \
+  '.default_branch_tags = [""]' \
+  '.default_branch_tags = ["a/b"]' \
+  '.default_branch_tags = ["a:b"]' \
+  '.default_branch_tags = ["la test"]' \
+  '.default_branch_tags = ["latest@x"]' \
+  '.default_branch_tags = "latest"' \
+  '.default_branch_tags = [1]' \
+  '.default_branch_tags = [null]' \
+  '.images.solo.default_branch_tags = ["a/b"]' \
+  '.images.solo.default_branch_tags = "stable"'; do
+  jq "$bad" "$alias_cat" > "$TEST_DIR/bad-alias.json"
+  : > "$TEST_DIR/bad-alias.out"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bad-alias.out" GITHUB_EVENT_NAME=workflow_dispatch \
+      GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/bad-alias.json" > "$TEST_DIR/bad-alias.log" 2>&1; then
+    fail "planner accepted invalid default_branch_tags: $bad"
+  fi
+  if [[ -s "$TEST_DIR/bad-alias.out" ]]; then
+    fail "planner emitted outputs for invalid default_branch_tags: $bad"
+  fi
+done
+
+# --- Package submodules ---------------------------------------------------------------
+
+# expect_plan_error <name> <catalog> <message> [env assignments...]
+expect_plan_error() {
+  local name="$1" cfg="$2" msg="$3"
+  shift 3
+  OUT="$TEST_DIR/$name.out"
+  : > "$OUT"
+  if env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$OUT" "${DEFAULT_ENV[@]}" "$@" \
+      bash "$PLAN" "$cfg" > "$TEST_DIR/$name.log" 2>&1; then
+    fail "planner accepted $name"
+  fi
+  grep -q -- "$msg" "$TEST_DIR/$name.log" || fail "$name: missing error '$msg'"
+}
+
+CALLER=GITHUB_REPOSITORY=ethereum-optimism/caller
+sub_base="$TEST_DIR/sub-base.json"
+write_v2_catalog "$sub_base"
+
+run_plan sub_default "$sub_base" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0] | has("caller_submodules")' 'false'
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
+
+sub_true="$TEST_DIR/sub-true.json"
+jq '.packages.stack.submodules = true' "$sub_base" > "$sub_true"
+run_plan sub_true "$sub_true" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'true'
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
+
+sub_recursive="$TEST_DIR/sub-recursive.json"
+jq '.packages.stack.submodules = "recursive"' "$sub_base" > "$sub_recursive"
+run_plan sub_recursive "$sub_recursive" "$CALLER" TRUSTED=false
+assert_json "$(matrix packages_matrix)" '[.[].caller_submodules] | unique | join(",")' 'recursive'
+assert_json "$(matrix packages_matrix)" '[.[].arch] | join(",")' 'x86_64'
+
+sub_false="$TEST_DIR/sub-false.json"
+jq '.packages.stack.submodules = "false"' "$sub_base" > "$sub_false"
+run_plan sub_false "$sub_false" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0] | has("caller_submodules")' 'false'
+
+# Legacy path "." for the calling repository maps to submodules.
+sub_self="$TEST_DIR/sub-self.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": "."}, "source_submodules": "recursive"}' \
+  "$sub_base" > "$sub_self"
+run_plan sub_self "$sub_self" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'recursive'
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
+assert_json "$(matrix packages_matrix)" '.[0].source_path' '.'
+
+sub_self_empty_repo="$TEST_DIR/sub-self-empty-repo.json"
+jq '.packages.stack += {"source": {"path": "."}, "source_submodules": "true"}' "$sub_base" > "$sub_self_empty_repo"
+run_plan sub_self_empty_repo "$sub_self_empty_repo" "$CALLER" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'true'
+assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
+
+# Legacy v1 catalog with the same source maps to submodules.
+legacy_doc="$TEST_DIR/legacy-doc.json"
+legacy_apko="$TEST_DIR/legacy-apko.json"
+write_legacy_docker "$legacy_doc"
+write_legacy_apko "$legacy_apko"
+jq '.melange.stack += {"source": {"repository": "ethereum-optimism/caller", "path": "."}, "source_submodules": "recursive"}' \
+  "$legacy_apko" > "$legacy_apko.tmp" && mv "$legacy_apko.tmp" "$legacy_apko"
+run_plan legacy_self "$legacy_doc" "$CALLER" LEGACY_APKO_CONFIG="$legacy_apko" TRUSTED=true
+assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].caller_submodules' 'recursive'
+assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].checkout_source' 'false'
+
+bad_value="$TEST_DIR/sub-bad-value.json"
+jq '.packages.stack.submodules = "yes"' "$sub_base" > "$bad_value"
+expect_plan_error sub_bad_value "$bad_value" "submodules must be false, true, or recursive" "$CALLER" TRUSTED=true
+
+other_sub="$TEST_DIR/sub-other.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "src"}, "submodules": "true"}' \
+  "$sub_base" > "$other_sub"
+expect_plan_error sub_with_other_source "$other_sub" "submodules applies only to the calling repository checkout" \
+  "$CALLER" TRUSTED=true
+
+other_root="$TEST_DIR/sub-other-root.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "."}}' "$sub_base" > "$other_root"
+expect_plan_error sub_other_root "$other_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
+
+pinned_root="$TEST_DIR/sub-pinned-root.json"
+jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": ".", "ref": "v1.0.0"}}' \
+  "$sub_base" > "$pinned_root"
+expect_plan_error sub_pinned_root "$pinned_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
+
+expect_plan_error sub_no_repo_env "$sub_self" "must be a subdirectory, not '.'" TRUSTED=true
+
 # --- Per-builder runner and event filter ------------------------------------------
 
 write_context_catalog() {
@@ -1061,92 +1248,5 @@ for change in \
     fail "planner emitted outputs for invalid builder configuration: $change"
   fi
 done
-
-# --- Package submodules ---------------------------------------------------------------
-
-# expect_plan_error <name> <catalog> <message> [env assignments...]
-expect_plan_error() {
-  local name="$1" cfg="$2" msg="$3"
-  shift 3
-  OUT="$TEST_DIR/$name.out"
-  : > "$OUT"
-  if env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$OUT" "${DEFAULT_ENV[@]}" "$@" \
-      bash "$PLAN" "$cfg" > "$TEST_DIR/$name.log" 2>&1; then
-    fail "planner accepted $name"
-  fi
-  grep -q -- "$msg" "$TEST_DIR/$name.log" || fail "$name: missing error '$msg'"
-}
-
-CALLER=GITHUB_REPOSITORY=ethereum-optimism/caller
-sub_base="$TEST_DIR/sub-base.json"
-write_v2_catalog "$sub_base"
-
-run_plan sub_default "$sub_base" "$CALLER" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '.[0] | has("caller_submodules")' 'false'
-assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
-
-sub_true="$TEST_DIR/sub-true.json"
-jq '.packages.stack.submodules = true' "$sub_base" > "$sub_true"
-run_plan sub_true "$sub_true" "$CALLER" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'true'
-assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
-
-sub_recursive="$TEST_DIR/sub-recursive.json"
-jq '.packages.stack.submodules = "recursive"' "$sub_base" > "$sub_recursive"
-run_plan sub_recursive "$sub_recursive" "$CALLER" TRUSTED=false
-assert_json "$(matrix packages_matrix)" '[.[].caller_submodules] | unique | join(",")' 'recursive'
-assert_json "$(matrix packages_matrix)" '[.[].arch] | join(",")' 'x86_64'
-
-sub_false="$TEST_DIR/sub-false.json"
-jq '.packages.stack.submodules = "false"' "$sub_base" > "$sub_false"
-run_plan sub_false "$sub_false" "$CALLER" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '.[0] | has("caller_submodules")' 'false'
-
-# Legacy path "." for the calling repository maps to submodules.
-sub_self="$TEST_DIR/sub-self.json"
-jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": "."}, "source_submodules": "recursive"}' \
-  "$sub_base" > "$sub_self"
-run_plan sub_self "$sub_self" "$CALLER" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'recursive'
-assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
-assert_json "$(matrix packages_matrix)" '.[0].source_path' '.'
-
-sub_self_empty_repo="$TEST_DIR/sub-self-empty-repo.json"
-jq '.packages.stack += {"source": {"path": "."}, "source_submodules": "true"}' "$sub_base" > "$sub_self_empty_repo"
-run_plan sub_self_empty_repo "$sub_self_empty_repo" "$CALLER" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '.[0].caller_submodules' 'true'
-assert_json "$(matrix packages_matrix)" '.[0].checkout_source' 'false'
-
-# Legacy v1 catalog with the same source maps to submodules.
-legacy_doc="$TEST_DIR/legacy-doc.json"
-legacy_apko="$TEST_DIR/legacy-apko.json"
-write_legacy_docker "$legacy_doc"
-write_legacy_apko "$legacy_apko"
-jq '.melange.stack += {"source": {"repository": "ethereum-optimism/caller", "path": "."}, "source_submodules": "recursive"}' \
-  "$legacy_apko" > "$legacy_apko.tmp" && mv "$legacy_apko.tmp" "$legacy_apko"
-run_plan legacy_self "$legacy_doc" "$CALLER" LEGACY_APKO_CONFIG="$legacy_apko" TRUSTED=true
-assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].caller_submodules' 'recursive'
-assert_json "$(matrix packages_matrix)" '[.[] | select(.package == "stack")][0].checkout_source' 'false'
-
-bad_value="$TEST_DIR/sub-bad-value.json"
-jq '.packages.stack.submodules = "yes"' "$sub_base" > "$bad_value"
-expect_plan_error sub_bad_value "$bad_value" "submodules must be false, true, or recursive" "$CALLER" TRUSTED=true
-
-other_sub="$TEST_DIR/sub-other.json"
-jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "src"}, "submodules": "true"}' \
-  "$sub_base" > "$other_sub"
-expect_plan_error sub_with_other_source "$other_sub" "submodules applies only to the calling repository checkout" \
-  "$CALLER" TRUSTED=true
-
-other_root="$TEST_DIR/sub-other-root.json"
-jq '.packages.stack += {"source": {"repository": "ethereum-optimism/other", "path": "."}}' "$sub_base" > "$other_root"
-expect_plan_error sub_other_root "$other_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
-
-pinned_root="$TEST_DIR/sub-pinned-root.json"
-jq '.packages.stack += {"source": {"repository": "ethereum-optimism/caller", "path": ".", "ref": "v1.0.0"}}' \
-  "$sub_base" > "$pinned_root"
-expect_plan_error sub_pinned_root "$pinned_root" "must be a subdirectory, not '.'" "$CALLER" TRUSTED=true
-
-expect_plan_error sub_no_repo_env "$sub_self" "must be a subdirectory, not '.'" TRUSTED=true
 
 echo "plan-images tests passed"

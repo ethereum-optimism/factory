@@ -25,6 +25,10 @@ inputs:
   ref_tag:
     description: 'Tag for the sanitized ref or release version, including any builder prefix and variant suffix.'
     required: true
+  alias_tags:
+    description: 'Extra tag names, comma-separated, without registry, each including any builder prefix and variant suffix. Published on the same image as sha_tag and ref_tag. Empty publishes none.'
+    required: false
+    default: ''
   id:
     description: 'Leg identifier. The digest is written to RUNNER_TEMP/<id>.txt.'
     required: true
@@ -130,6 +134,8 @@ runs:
         APKO_CONFIG: ${{ inputs.config }}
         APKO_TAG: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.sha_tag }}
         APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.ref_tag }}
+        APKO_REPO: ${{ inputs.registry }}/${{ inputs.image }}
+        APKO_ALIAS_TAGS: ${{ inputs.alias_tags }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
         APKO_GENERIC_USER: oauth2accesstoken
@@ -144,6 +150,13 @@ runs:
         token="$(gcloud auth print-access-token)"
         echo "::add-mask::$token"
         export APKO_GENERIC_PASS="$token"
+
+        if [ -n "$APKO_ALIAS_TAGS" ]; then
+          IFS=',' read -ra alias_tags <<< "$APKO_ALIAS_TAGS"
+          for alias_tag in "${alias_tags[@]}"; do
+            APKO_EXTRA_TAGS="${APKO_EXTRA_TAGS},${APKO_REPO}:${alias_tag}"
+          done
+        fi
 
         mounts=(-v "${config_dir}:${config_dir}:ro" -v "${out_dir}:${out_dir}")
         if [ -n "$APKO_REPOSITORIES" ]; then
@@ -209,6 +222,7 @@ runs:
         KO_REPO: ${{ inputs.registry }}/${{ inputs.image }}
         KO_SHA_TAG: ${{ inputs.sha_tag }}
         KO_REF_TAG: ${{ inputs.ref_tag }}
+        KO_ALIAS_TAGS: ${{ inputs.alias_tags }}
         KO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -222,7 +236,14 @@ runs:
         done
         platforms="${platforms%,}"
 
-        ko_args=(build --bare --sbom=spdx --platform="$platforms" --tags="${KO_SHA_TAG},${KO_REF_TAG}")
+        ko_tags="${KO_SHA_TAG},${KO_REF_TAG}"
+        if [ -n "$KO_ALIAS_TAGS" ]; then
+          IFS=',' read -ra alias_tags <<< "$KO_ALIAS_TAGS"
+          for alias_tag in "${alias_tags[@]}"; do
+            ko_tags="${ko_tags},${alias_tag}"
+          done
+        fi
+        ko_args=(build --bare --sbom=spdx --platform="$platforms" --tags="$ko_tags")
         while IFS= read -r flag; do
           if [ -n "$flag" ]; then
             ko_args+=("--ldflags=${flag}")
@@ -299,6 +320,7 @@ runs:
         IMAGE: ${{ inputs.image }}
         SHA_TAG: ${{ inputs.sha_tag }}
         REF_TAG: ${{ inputs.ref_tag }}
+        ALIAS_TAGS: ${{ inputs.alias_tags }}
         DIGESTS_DIR: ${{ inputs.digests_dir }}
       run: |
         set -euo pipefail
@@ -312,10 +334,16 @@ runs:
           echo "::error::no digest files in $DIGESTS_DIR" >&2
           exit 1
         fi
+        tag_args=(-t "${name}:${SHA_TAG}" -t "${name}:${REF_TAG}")
+        if [ -n "$ALIAS_TAGS" ]; then
+          IFS=',' read -ra alias_tags <<< "$ALIAS_TAGS"
+          for alias_tag in "${alias_tags[@]}"; do
+            tag_args+=(-t "${name}:${alias_tag}")
+          done
+        fi
         for attempt in 1 2 3; do
           if timeout 180 docker buildx imagetools create \
-            -t "${name}:${SHA_TAG}" \
-            -t "${name}:${REF_TAG}" \
+            "${tag_args[@]}" \
             "${refs[@]}"; then
             break
           fi

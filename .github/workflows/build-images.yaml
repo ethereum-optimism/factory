@@ -374,6 +374,7 @@ jobs:
           image: ${{ matrix.image }}
           sha_tag: ${{ matrix.sha_tag }}
           ref_tag: ${{ matrix.ref_tag }}
+          alias_tags: ${{ matrix.alias_tags }}
           id: ${{ matrix.id }}
           archs: ${{ matrix.archs }}
           config: ${{ matrix.config }}
@@ -496,6 +497,7 @@ jobs:
           image: ${{ matrix.image }}
           sha_tag: ${{ matrix.sha_tag }}
           ref_tag: ${{ matrix.ref_tag }}
+          alias_tags: ${{ matrix.alias_tags }}
           id: ${{ matrix.id }}
           digests_dir: ${{ runner.temp }}/pushed
 

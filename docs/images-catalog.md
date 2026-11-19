@@ -78,6 +78,7 @@ the publish job completed.
 | `version` | yes | Must be `2`. A catalog without `version` is read as legacy (see below). |
 | `registry` | when publishing | Registry prefix, no trailing slash. Trusted runs fail when it is missing and there is something to publish. |
 | `tag_prefix` | no | Prefix on every published tag. Letters, digits, dot, dash. |
+| `default_branch_tags` | no | Alias tags, for example `latest`, published with the sha and ref tags on trusted default-branch runs. Letters, digits, dot, dash only. Default `[]`. See Default branch aliases. |
 | `release` | no | Release tag mapping (see below). |
 | `shared_paths` | no | Changed-file patterns that plan every image and package. |
 | `packages` | no | Melange packages (see below). Names match `^[a-z0-9][a-z0-9._-]*$`. |
@@ -202,6 +203,7 @@ When an image has both builders, `primary` is required. Other image fields:
 - `smoke`: `commands` (each string split on whitespace into entrypoint and
   arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
   `verify_version` (on release tags, a command must print the version).
+- `default_branch_tags`: overrides the top-level list for this image. An empty array publishes no alias tags for this image.
 
 Resolution order for each builder's architectures: the builder's `archs`, then
 the image `archs`, then both architectures. Example: an image still built with
@@ -289,6 +291,16 @@ Published tags for a prefix `P`:
 - apko variants append their `tag_suffix` to both tags.
 - Docker images are pushed by digest per architecture, then merged into a
   manifest list under those tags.
+
+### Default branch aliases
+
+The top-level `default_branch_tags` (or the image's own list) names alias tags such as
+`latest`. On a trusted run whose ref is the default branch, each alias is published for
+every builder of the image, next to the sha and ref tags: `P<alias>`, with the apko
+variant `tag_suffix` appended. For example, a primary docker builder publishes
+`latest`, and an apko builder with `tag_prefix` `apko-` publishes `apko-latest`.
+Aliases are never published on untrusted runs, on release tags, or on other branches.
+Without the key, nothing changes.
 
 ## Trusted and untrusted runs
 

@@ -22,6 +22,10 @@
       "pattern": "^[a-zA-Z0-9.-]*$",
       "description": "Prefix prepended to every published tag."
     },
+    "default_branch_tags": {
+      "$ref": "#/$defs/tag_names",
+      "description": "Alias tags (for example latest) published with the sha and ref tags on trusted default-branch runs. Not published on release tags, pull requests, or other branches. Each builder applies its own tag prefix. An image can override this list with its own default_branch_tags."
+    },
     "release": {
       "type": "object",
       "additionalProperties": false,
@@ -86,6 +90,14 @@
     }
   },
   "$defs": {
+    "tag_names": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9.-]+$"
+      }
+    },
     "package": {
       "type": "object",
       "additionalProperties": false,
@@ -215,6 +227,10 @@
             ]
           },
           "description": "Defaults to amd64 and arm64. Untrusted runs build amd64 only."
+        },
+        "default_branch_tags": {
+          "$ref": "#/$defs/tag_names",
+          "description": "Overrides the top-level default_branch_tags for this image. An empty array publishes no alias tags for this image."
         },
         "paths": {
           "type": "array",
