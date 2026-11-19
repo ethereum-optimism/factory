@@ -104,7 +104,7 @@
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Source repository checked out before the build. path must be a subdirectory, except '.' for the calling repository without ref, which plans as the calling repository checkout.",
+          "description": "Source repository checked out before the build. A path of '.' for the calling repository without ref plans as the calling repository checkout. A path of '.' for any other repository, or with a ref, checks out under .package-sources/<package> and builds with root.",
           "properties": {
             "repository": {
               "type": "string",
@@ -114,7 +114,12 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "type": "string",
+              "description": "Checkout path, relative to the workspace. Defaults to '.'."
+            },
+            "root": {
+              "type": "boolean",
+              "description": "Build as if the checkout were the workspace root: the melange configuration, the pipelines directory, cache_key_files and the source directory resolve inside the checkout. Defaults to true when path is '.', otherwise false. A path of '.' with root false is rejected. Not valid for the calling repository checkout."
             }
           }
         },

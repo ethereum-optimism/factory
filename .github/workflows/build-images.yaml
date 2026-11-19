@@ -161,6 +161,7 @@ jobs:
           source_ref: ${{ matrix.source_ref }}
           source_path: ${{ matrix.source_path }}
           source_submodules: ${{ matrix.source_submodules }}
+          build_dir: ${{ matrix.build_dir }}
           use_gha_cache: ${{ matrix.use_gha_cache }}
           cache_key_files: ${{ matrix.cache_key_files }}
           trusted: ${{ needs.plan.outputs.trusted }}

@@ -3,6 +3,7 @@ name: plan-images tests
 on:
   pull_request:
     paths:
+      - actions/build-packages/**
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
@@ -14,6 +15,7 @@ on:
     branches:
       - main
     paths:
+      - actions/build-packages/**
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
@@ -37,6 +39,9 @@ jobs:
 
       - name: Test plan-images
         run: actions/plan-images/plan-images.test.sh
+
+      - name: Test build-packages build directory resolution
+        run: actions/build-packages/resolve-build-root.test.sh
 
       - name: Test publish-image bake overrides
         run: actions/publish-image/publish-image.test.sh

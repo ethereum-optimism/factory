@@ -80,6 +80,21 @@ def has_member($xs; $x): any($xs[]; . == $x);
 
 def is_one_of($v; $xs): any($xs[]; . == $v);
 
+def is_root_path: . == "" or . == "." or . == "./";
+
+def norm_source($k; $s; $self):
+  if $s == null then null
+  elif $self then
+    (if ($s | has("root")) then error("packages.\($k).source.root does not apply to the calling repository checkout") else null end)
+  else
+    ($s.path // ".") as $p
+    | (if ($s | has("root")) then $s.root else ($p | is_root_path) end) as $root
+    | if ($root | type) != "boolean" then error("packages.\($k).source.root must be true or false")
+      elif ($p | is_root_path) and $root != true then error("packages.\($k).source.path '.' needs source.root: true, since a checkout at the workspace root would delete the caller's files")
+      else $s + {path: (if $root and ($p | is_root_path) then ".package-sources/\($k)" else $p end), root: $root}
+      end
+  end;
+
 def norm_package($k):
   (if . == null then {} else . end) as $c
   | ($c.source // null) as $s
@@ -90,7 +105,7 @@ def norm_package($k):
   | {
       config: ($c.config // ("melange/" + $k + ".yaml")),
       runner_profile: (if ($c | has("runner_profile")) then $c.runner_profile else "standard" end),
-      source: (if $self then null else $s end),
+      source: norm_source($k; $s; $self),
       source_submodules: (if $self then "false" else (($c.source_submodules // "false") | tostring) end),
       submodules: ((if $self then ($c.submodules // $c.source_submodules) else $c.submodules end) // "false" | tostring),
       use_gha_cache: ($c.use_gha_cache // false),
@@ -111,8 +126,6 @@ def validate_package($k):
     then error("packages.\($k).runner_profile must be standard or large") else . end
   | if ([.archs[] | select(is_one_of(.; ["x86_64", "aarch64"]) | not)] | length) > 0 or (.archs | length) == 0
     then error("packages.\($k).archs must be a non-empty subset of x86_64, aarch64") else . end
-  | if .source != null and ((.source.path // ".") == ".")
-    then error("packages.\($k).source.path must be a subdirectory, not '.', so the checkout does not clean the workspace") else . end
   | if is_one_of(.submodules; ["false", "true", "recursive"]) | not
     then error("packages.\($k).submodules must be false, true, or recursive") else . end
   | if .submodules != "false" and .source != null
@@ -722,7 +735,8 @@ main() {
               cargo_profile: (if $trusted then $c.cargo_profile.trusted else $c.cargo_profile.untrusted end),
               build_env: pkg_env(merge_args($hook; {}); $c.build_env),
               build_version: (if $version != "" then $version else $c.build_version end)
-            } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end))
+            } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end)
+              + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end))
         ]) as $packages
       | ([ if $trusted then empty else
             $images[] as $n

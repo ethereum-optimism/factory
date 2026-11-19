@@ -47,6 +47,14 @@ inputs:
     description: 'Submodule mode for the source checkout: false, true, or recursive.'
     required: false
     default: 'false'
+  build_dir:
+    description: >
+      Directory, relative to the workspace, that the build treats as the
+      repository root. The melange configuration, the pipelines directory,
+      the cache key files and the melange working directory resolve under it.
+      Empty or "." for the workspace.
+    required: false
+    default: '.'
   use_gha_cache:
     description: '"true" to restore and save the melange cache.'
     required: false
@@ -72,6 +80,16 @@ runs:
         path: ${{ inputs.source_path }}
         submodules: ${{ inputs.source_submodules }}
         persist-credentials: false
+
+    - name: Resolve build directory
+      id: build_root
+      shell: bash
+      env:
+        BUILD_DIR: ${{ inputs.build_dir }}
+      run: |
+        set -euo pipefail
+        root="$("${GITHUB_ACTION_PATH}/resolve-build-root.sh" "$GITHUB_WORKSPACE" "$BUILD_DIR")"
+        echo "build_root=$root" >> "$GITHUB_OUTPUT"
 
     - name: Decide melange cache access
       id: cache_policy
@@ -119,6 +137,7 @@ runs:
         ARCH: ${{ inputs.arch }}
         CARGO_PROFILE: ${{ inputs.cargo_profile }}
         KEY_FILES: ${{ inputs.cache_key_files }}
+        BUILD_ROOT: ${{ steps.build_root.outputs.build_root }}
       run: |
         set -euo pipefail
         prefix="melange-v2-${PACKAGE}-${ARCH}-${CARGO_PROFILE:-none}."
@@ -130,14 +149,14 @@ runs:
             path="${path#"${path%%[![:space:]]*}"}"
             path="${path%"${path##*[![:space:]]}"}"
             [ -n "$path" ] || continue
-            if [ ! -f "$path" ]; then
+            if [ ! -f "$BUILD_ROOT/$path" ]; then
               echo "cache key file missing: $path" >&2
               exit 1
             fi
             hash_inputs+=("$path")
           done
           if [ "${#hash_inputs[@]}" -gt 0 ]; then
-            key="${key}$(sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
+            key="${key}$(cd "$BUILD_ROOT" && sha256sum "${hash_inputs[@]}" | sha256sum | cut -d' ' -f1)"
           fi
         fi
         {
@@ -278,6 +297,7 @@ runs:
         SOURCE_PATH: ${{ inputs.source_path }}
         SOURCE_COMMIT: ${{ steps.source_metadata.outputs.commit }}
         SOURCE_DATE: ${{ steps.source_metadata.outputs.date }}
+        BUILD_ROOT: ${{ steps.build_root.outputs.build_root }}
       run: |
         set -euo pipefail
         metadata_env="${RUNNER_TEMP}/melange-build.env"
@@ -306,13 +326,14 @@ runs:
           printf '%s\n' "$line" >> "$metadata_env"
         done <<< "$MELANGE_BUILD_ENV"
         echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
+        cd "$BUILD_ROOT"
         sudo env "PATH=$PATH" \
           melange build "$MELANGE_CONFIG" \
           --arch "$MELANGE_ARCH" \
           --out-dir "${GITHUB_WORKSPACE}/apk-packages" \
           --source-dir "${GITHUB_WORKSPACE}/${SOURCE_PATH}" \
           --cache-dir "${GITHUB_WORKSPACE}/melange-cache" \
-          --pipeline-dir "${GITHUB_WORKSPACE}/pipelines" \
+          --pipeline-dir "${BUILD_ROOT}/pipelines" \
           --env-file "$metadata_env"
 
     - name: Fix output permissions
