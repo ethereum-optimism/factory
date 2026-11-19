@@ -5,7 +5,9 @@ on:
     paths:
       - actions/plan-images/**
       - actions/fork-context/**
+      - actions/publish-image/**
       - scripts/lint-untrusted-permissions*
+      - test/fixtures/**
       - .github/workflows/build-images*.yaml
       - .github/workflows/plan-images-test.yaml
   push:
@@ -14,7 +16,9 @@ on:
     paths:
       - actions/plan-images/**
       - actions/fork-context/**
+      - actions/publish-image/**
       - scripts/lint-untrusted-permissions*
+      - test/fixtures/**
       - .github/workflows/build-images*.yaml
       - .github/workflows/plan-images-test.yaml
 
@@ -33,6 +37,9 @@ jobs:
 
       - name: Test plan-images
         run: actions/plan-images/plan-images.test.sh
+
+      - name: Test publish-image bake overrides
+        run: actions/publish-image/publish-image.test.sh
 
       - name: Lint self-tests
         run: scripts/lint-untrusted-permissions.test.sh
