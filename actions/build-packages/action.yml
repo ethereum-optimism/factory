@@ -67,10 +67,24 @@ inputs:
     description: '"true" for trusted runs. Only trusted runs may save the cache.'
     required: false
     default: 'false'
+  free_disk:
+    description: '"true" to remove preinstalled hosted-runner toolchains before the build.'
+    required: false
+    default: 'false'
 
 runs:
   using: composite
   steps:
+    - name: Free disk space
+      if: inputs.free_disk == 'true'
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/free-disk.sh"
+
+    - name: Prune unused Docker images
+      if: inputs.free_disk == 'true'
+      shell: bash
+      run: sudo docker image prune -af >/dev/null
+
     - name: Checkout source repository
       if: inputs.checkout_source == 'true'
       uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6

@@ -835,7 +835,8 @@ main() {
               build_env: pkg_env(merge_args($hook; {}); $c.build_env),
               build_version: (if $version != "" then $version else $c.build_version end)
             } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end)
-              + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end))
+              + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end)
+              + (if (($trusted | not) and ($c.runner_profile == "large")) then {free_disk: "true"} else {} end))
         ]) as $packages
       | ([ if $trusted then empty else
             $images[] as $n
