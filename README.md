@@ -107,8 +107,9 @@ jobs:
 ```
 
 Replace the placeholder with the factory commit SHA. The job runs in the
-GitHub environment named by the `environment` input (default `release`) in the
-calling repository, so that environment must hold the `GORELEASER_KEY` secret.
+GitHub environment named by the `environment` input (default `goreleaser`) in the
+calling repository, so that environment must hold the `GORELEASER_KEY` secret. Keep
+it separate from the `release` environment used for image publishing.
 The calling repository's mise configuration must provide `goreleaser`, or the
 `mise-install-args` input must name it.
 

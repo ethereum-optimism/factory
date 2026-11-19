@@ -20,7 +20,7 @@ on:
         description: GitHub environment in the calling repository that holds GORELEASER_KEY.
         required: false
         type: string
-        default: release
+        default: goreleaser
       mise-install-args:
         description: Arguments for mise install, such as a tool name, to install GoReleaser. Empty installs every tool in the repository's mise config.
         required: false
