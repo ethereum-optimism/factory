@@ -274,6 +274,7 @@ runs:
         push: true
         set: |
           *.platform=linux/${{ inputs.arch }}
+          *.tags=
           *.attest=type=provenance,mode=max
           *.attest=type=sbom
           *.cache-from=type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}

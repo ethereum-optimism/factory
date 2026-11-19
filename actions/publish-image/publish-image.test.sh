@@ -51,6 +51,9 @@ jq -e --arg t "$TARGET" '
 jq -e --arg t "$TARGET" '
   .target[$t].output[0]["push-by-digest"] == "true"
 ' "$WORK/print.json" > /dev/null || fail "output is not push-by-digest"
+jq -e --arg t "$TARGET" '
+  (.target[$t].tags // []) | length == 0
+' "$WORK/print.json" > /dev/null || fail "publish overrides left file tags on the target"
 
 echo "publish-image bake overrides accepted by bake:"
 sed 's/^/  --set /' "$WORK/overrides.txt"
