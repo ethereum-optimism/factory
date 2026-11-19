@@ -57,3 +57,38 @@ jq -e --arg t "$TARGET" '
 
 echo "publish-image bake overrides accepted by bake:"
 sed 's/^/  --set /' "$WORK/overrides.txt"
+
+if grep -q 'docker/login-action' "$ACTION"; then
+  fail "publish-image logs in with a static token instead of the credential helper"
+fi
+if grep -q 'registry_token' "$ACTION"; then
+  fail "publish-image still takes a static registry token input"
+fi
+grep -q -F "configure-docker \"\${REGISTRY%%/*}\" --quiet" "$ACTION" \
+  || fail "credential helper is not configured for the registry host"
+grep -q -F "export APKO_GENERIC_PASS=\"\$token\"" "$ACTION" \
+  || fail "apko login does not mint its token immediately before the sandbox starts"
+
+REFRESH="$ROOT/actions/publish-image/refresh-attest-auth.sh"
+[ -x "$REFRESH" ] || fail "missing $REFRESH"
+FAKE_BIN="$WORK/bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/gcloud" <<'FAKE'
+#!/usr/bin/env bash
+echo "fake-token-123"
+FAKE
+chmod +x "$FAKE_BIN/gcloud"
+CONFIG="$WORK/docker/config.json"
+mkdir -p "$(dirname "$CONFIG")"
+echo '{"credHelpers":{"us-docker.pkg.dev":"gcloud"},"auths":{"other.example":{"auth":"eA=="}}}' > "$CONFIG"
+PATH="$FAKE_BIN:$PATH" REGISTRY="us-docker.pkg.dev/proj/repo" DOCKER_CONFIG_FILE="$CONFIG" \
+  bash "$REFRESH" > /dev/null
+jq -e '.credHelpers["us-docker.pkg.dev"] == "gcloud"' "$CONFIG" > /dev/null \
+  || fail "refresh dropped the credential helper entry"
+jq -e '.auths["other.example"].auth == "eA=="' "$CONFIG" > /dev/null \
+  || fail "refresh dropped an unrelated auths entry"
+expected_auth="$(printf 'oauth2accesstoken:fake-token-123' | base64 | tr -d '\n')"
+jq -e --arg a "$expected_auth" '.auths["us-docker.pkg.dev"].auth == $a' "$CONFIG" > /dev/null \
+  || fail "refresh did not write the registry host auths entry"
+
+echo "publish-image registry auth: credential helper, apko token and attest refresh checks passed"

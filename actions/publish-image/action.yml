@@ -5,8 +5,9 @@ description: >
   Wolfi SDK image; ko publishes a multi-architecture image with ko build for
   every architecture in one invocation; docker-arch builds one architecture
   natively and pushes it by digest; docker-manifest merges the per-architecture
-  digests into the tagged manifest list. The calling job performs the registry
-  login for docker kinds, and passes the registry token for the apko kind.
+  digests into the tagged manifest list. The action configures the gcloud Docker
+  credential helper for the registry. The calling job must authenticate to Google
+  Cloud with google-github-actions/auth first.
 
 inputs:
   kind:
@@ -27,10 +28,6 @@ inputs:
   id:
     description: 'Leg identifier. The digest is written to RUNNER_TEMP/<id>.txt.'
     required: true
-  registry_token:
-    description: 'apko kind only: access token for the registry, used for apko login.'
-    required: false
-    default: ''
   archs:
     description: 'apko kind only: comma-separated architectures, for example amd64,arm64.'
     required: false
@@ -104,6 +101,14 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Configure Artifact Registry credential helper
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        set -euo pipefail
+        gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
+
     - name: Resolve apko sandbox image
       id: sandbox
       if: inputs.kind == 'apko'
@@ -128,7 +133,6 @@ runs:
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
         APKO_GENERIC_USER: oauth2accesstoken
-        APKO_GENERIC_PASS: ${{ inputs.registry_token }}
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -136,6 +140,10 @@ runs:
         config_dir="$(cd "$(dirname "$config_path")" && pwd)"
         config_file="$(basename "$config_path")"
         out_dir="$(mktemp -d "${APKO_BUILD_ROOT}/apko-publish.XXXXXX")"
+
+        token="$(gcloud auth print-access-token)"
+        echo "::add-mask::$token"
+        export APKO_GENERIC_PASS="$token"
 
         mounts=(-v "${config_dir}:${config_dir}:ro" -v "${out_dir}:${out_dir}")
         if [ -n "$APKO_REPOSITORIES" ]; then
@@ -331,6 +339,13 @@ runs:
           echo "| **Digest** | \`${manifest_digest}\` |"
           echo "| **Platforms** | ${platforms} |"
         } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Refresh registry auth for attestation push
+      if: inputs.kind == 'apko' || inputs.kind == 'ko' || inputs.kind == 'docker-manifest'
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: bash "${GITHUB_ACTION_PATH}/refresh-attest-auth.sh"
 
     - name: Resolve digest
       id: digest
