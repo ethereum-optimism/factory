@@ -107,6 +107,13 @@ Sanitizing replaces every character outside `[a-zA-Z0-9.]` with `-`. Set
 Defaults: `tag_regex` `^([^/]+)/(v.+)$`, `service_match` 1, `version_match` 2,
 `publish_tag` `${ref_name}`, `source_ref` `${ref_name}`.
 
+On a release tag the planner sets `VERSION` to the tag's version (for example
+`v1.2.3`) for the tagged image. In `build` mode the value is added to
+`build_args`, and in `ko` mode it is added to `env`. Either one replaces a
+`VERSION` entry from the catalog for that run. `bake` mode does not read
+`build_args`, so it gets no `VERSION`. Runs that are not release tags are
+unchanged, and catalog values pass through as before.
+
 A tag that does not match `tag_regex`, or names an image that is not in the
 catalog, plans nothing and succeeds. The planner prints a `::notice::` that
 names the tag.
