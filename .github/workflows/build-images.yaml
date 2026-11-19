@@ -353,22 +353,6 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
-      - name: Get Artifact Registry token
-        id: ar_token
-        shell: bash
-        run: |
-          set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          echo "::add-mask::$token"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
-
-      - name: Login to Artifact Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: us-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.ar_token.outputs.token }}
-
       - name: Set up Go for ko
         if: matrix.mode == 'ko'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
@@ -390,7 +374,6 @@ jobs:
           sha_tag: ${{ matrix.sha_tag }}
           ref_tag: ${{ matrix.ref_tag }}
           id: ${{ matrix.id }}
-          registry_token: ${{ steps.ar_token.outputs.token }}
           archs: ${{ matrix.archs }}
           config: ${{ matrix.config }}
           repositories: ${{ steps.stage.outputs.repositories }}
@@ -496,22 +479,6 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
-      - name: Get Artifact Registry token
-        id: ar_token
-        shell: bash
-        run: |
-          set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          echo "::add-mask::$token"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
-
-      - name: Login to Artifact Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: us-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.ar_token.outputs.token }}
-
       - name: Download pushed digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -603,21 +570,13 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           create_credentials_file: true
 
-      - name: Get Artifact Registry token
-        id: ar_token
+      - name: Configure Artifact Registry credential helper
         shell: bash
+        env:
+          REGISTRY: ${{ matrix.registry }}
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          echo "::add-mask::$token"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
-
-      - name: Login to Artifact Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: us-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.ar_token.outputs.token }}
+          gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
 
       - name: Download published digest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
