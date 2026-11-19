@@ -128,7 +128,7 @@ standard hosted runner regardless of `runner_profile`.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `config` | `melange/<name>.yaml` | Melange configuration path. |
-| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. |
+| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. Builders take the same key, see Images and builders. |
 | `source` | none | Repository checked out before the build, with `repository`, `ref`, `path`. `path` must be a subdirectory, never `.`. Omit `repository` to check out the calling repository. |
 | `source_submodules` | `"false"` | `"false"`, `"true"`, or `"recursive"`. Submodules of the `source` checkout. |
 | `submodules` | `false` | `false`, `true`, or `"recursive"`. Submodules of the calling repository checkout. Only valid when `source` is omitted. Public submodules over https are fetched without credentials. A private submodule needs the app-token mechanism on trusted runs only, and such a package must not depend on it in untrusted runs. |
@@ -155,6 +155,11 @@ secrets and no OIDC token.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
+- `runner_profile`: `standard` (default) or `large`, as for packages. Selects
+  the runner of this builder's publish legs on trusted runs, per architecture.
+  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
+  profile. Untrusted runs ignore it and use the standard runner.
+- `events`: contexts in which the builder is planned. See Builder events.
 
 ko mode fields (`dockerfile`, `target`, `build_args`, `bake_file`, and `set` do
 not apply to ko):
@@ -185,6 +190,11 @@ the same way a Dockerfile pulls `FROM`.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
+- `runner_profile`: `standard` (default) or `large`, as for packages. Selects
+  the runner of this builder's publish legs on trusted runs, per architecture.
+  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
+  profile. Untrusted runs ignore it and use the standard runner.
+- `events`: contexts in which the builder is planned. See Builder events.
 
 When an image has both builders, `primary` is required. Other image fields:
 
@@ -223,6 +233,42 @@ PATH while the Dockerfile image ships `/bin/tool`:
     "apko": {"config": "apko/widget.yaml", "smoke": {"commands": ["mytool --version"]}}
   },
   "primary": "docker"
+}
+```
+
+### Builder events
+
+`events` is an array of contexts. Each value is one of:
+
+- `pull_request`: pull requests, and merge queue builds (`merge_group`);
+- `push`: every push event, including pushes to a branch other than the default branch (those run untrusted);
+- `schedule`;
+- `release`: runs on a release tag;
+- `workflow_dispatch`.
+
+The default is all five, so a builder without `events` is planned in every
+context. The context of a run is `release` on a tag ref. Otherwise it is the
+event name, with `pull_request`, `pull_request_target`, and `merge_group` all
+mapped to `pull_request`. An empty array, an unknown value, or a value that is
+not a string fails the plan.
+
+A builder is planned only when its `events` include the context. An image with
+no builder planned for the context is skipped without error. Packages are
+planned as before, from the images that remain and from changed package files.
+
+The primary builder stays the one named by `primary`, even when it is filtered
+out. The other builder keeps the tag prefix it has when both run. For example,
+with `primary` set to `docker` and the docker builder filtered out on a push,
+the apko builder still publishes `apko-<sha>`:
+
+```json
+"api": {
+  "builders": {
+    "docker": {"dockerfile": "api/Dockerfile", "runner_profile": "large", "events": ["release", "workflow_dispatch"]},
+    "apko": {"config": "apko/api.yaml"}
+  },
+  "primary": "docker",
+  "smoke": {"commands": ["api --version"]}
 }
 ```
 

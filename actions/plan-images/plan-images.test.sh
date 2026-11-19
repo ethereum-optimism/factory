@@ -1110,4 +1110,143 @@ expect_plan_error sub_pinned_root "$pinned_root" "must be a subdirectory, not '.
 
 expect_plan_error sub_no_repo_env "$sub_self" "must be a subdirectory, not '.'" TRUSTED=true
 
+# --- Per-builder runner and event filter ------------------------------------------
+
+write_context_catalog() {
+  cat > "$1" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "packages": {
+    "stack": {"config": "melange/stack.yaml", "archs": ["x86_64"]}
+  },
+  "images": {
+    "heavy": {
+      "builders": {
+        "docker": {"dockerfile": "Dockerfile", "runner_profile": "large", "events": ["release", "workflow_dispatch"]}
+      },
+      "paths": ["heavy/**"]
+    },
+    "light": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["light/**"]
+    },
+    "split": {
+      "builders": {
+        "docker": {"dockerfile": "Dockerfile", "events": ["release"]},
+        "apko": {"config": "apko/split.yaml", "needs_packages": ["stack"], "runner_profile": "large"}
+      },
+      "primary": "docker",
+      "paths": ["split/**"]
+    },
+    "pronly": {
+      "builders": {"apko": {"config": "apko/pronly.yaml", "events": ["pull_request"]}},
+      "paths": ["pronly/**"]
+    }
+  }
+}
+JSON
+}
+
+ctx="$TEST_DIR/context.json"
+write_context_catalog "$ctx"
+PUSH_MAIN=(GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch)
+DISPATCH_MAIN=(GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch)
+PR_BRANCH=(GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/7/merge GITHUB_REF_NAME=7/merge GITHUB_REF_TYPE=branch)
+RELEASE_HEAVY=(GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/heavy/v1.2.3 GITHUB_REF_NAME=heavy/v1.2.3 GITHUB_REF_TYPE=tag)
+
+# Trusted default-branch push: builders limited to release or dispatch are not planned, and an image left without a builder is skipped.
+run_plan ctx_push "$ctx" TRUSTED=true "${PUSH_MAIN[@]}"
+assert_eq "$(out_value "$OUT" selected_images)" "light,split" "push plans only images with a builder for push"
+assert_json "$(matrix publish_matrix)" '[.[].image] | unique | join(",")' 'light,split'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .kind] | join(",")' 'apko'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .runner] | join(",")' 'oplabs-ubuntu-x86'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "light") | .runner] | unique | join(",")' 'ubuntu-24.04,ubuntu-24.04-arm'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .ref_tag] | join(",")' 'apko-main'
+
+# Scheduled runs plan the full catalog through the same filter.
+run_plan ctx_schedule "$ctx" TRUSTED=true GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch
+assert_eq "$(out_value "$OUT" selected_images)" "light,split" "schedule plans builders whose events include schedule only"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "heavy")] | length' '0'
+
+# Dispatch from the default branch includes workflow_dispatch builders.
+run_plan ctx_dispatch "$ctx" TRUSTED=true "${DISPATCH_MAIN[@]}"
+assert_eq "$(out_value "$OUT" selected_images)" "heavy,light,split" "dispatch plans workflow_dispatch builders"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "heavy") | .runner] | unique | join(",")' 'oplabs-ubuntu-arm,oplabs-ubuntu-x86'
+
+# Release tag: the image's builders whose events include release are planned, and the rest are not.
+run_plan ctx_release "$ctx" TRUSTED=true "${RELEASE_HEAVY[@]}"
+assert_eq "$(out_value "$OUT" selected_images)" "heavy" "release tag plans the tagged image"
+assert_eq "$(out_value "$OUT" is_release)" "true" "release tag context"
+assert_json "$(matrix publish_matrix)" 'sort_by(.arch) | map(.runner) | join(",")' 'oplabs-ubuntu-x86,oplabs-ubuntu-arm'
+
+run_plan ctx_release_split "$ctx" TRUSTED=true GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/split/v1.0.0 \
+  GITHUB_REF_NAME=split/v1.0.0 GITHUB_REF_TYPE=tag
+assert_eq "$(out_value "$OUT" selected_images)" "split" "release tag for a dual image"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .sha_tag] | unique | join(",")' "$SHA"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.kind == "apko") | .sha_tag] | join(",")' "apko-$SHA"
+
+# A tagged image with no builder for the release context plans nothing and succeeds.
+run_plan ctx_release_pronly "$ctx" TRUSTED=true GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/pronly/v1.0.0 \
+  GITHUB_REF_NAME=pronly/v1.0.0 GITHUB_REF_TYPE=tag
+assert_eq "$(out_value "$OUT" selected_images)" "" "release tag with no builder for release plans nothing"
+assert_json "$(matrix publish_matrix)" 'length' '0'
+
+# Untrusted pull request: pull_request builders are planned, release and dispatch builders are not.
+run_plan ctx_pr "$ctx" TRUSTED=false "${PR_BRANCH[@]}"
+assert_eq "$(out_value "$OUT" selected_images)" "light,pronly,split" "pull request plans pull_request builders"
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "heavy")] | length' '0'
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "split") | .builder] | unique | join(",")' 'apko'
+
+# Merge queue builds use the pull_request context.
+run_plan ctx_merge_group "$ctx" TRUSTED=false GITHUB_EVENT_NAME=merge_group GITHUB_REF=refs/heads/gh-readonly-queue/main/pr-7 \
+  GITHUB_REF_NAME=gh-readonly-queue/main/pr-7 GITHUB_REF_TYPE=branch
+assert_eq "$(out_value "$OUT" selected_images)" "light,pronly,split" "merge group uses the pull_request context"
+
+# Untrusted plan for a large builder: the build legs use the standard runner and no custom label is emitted.
+run_plan ctx_untrusted_release "$ctx" TRUSTED=false "${RELEASE_HEAVY[@]}"
+assert_eq "$(out_value "$OUT" selected_images)" "heavy" "untrusted release tag plans the tagged image"
+assert_json "$(matrix build_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix smoke_matrix)" 'length' '0'
+if grep -q 'oplabs' "$OUT"; then
+  fail "untrusted plan emitted a custom runner label"
+fi
+
+# Primary builder filtered out for the context: the remaining builder keeps the tag prefix it has when both run.
+primary_apko="$TEST_DIR/primary-apko.json"
+jq '.images.split.primary = "apko" | .images.split.builders.apko.events = ["release"] | .images.split.builders.docker.events = ["push"]' \
+  "$ctx" > "$primary_apko"
+run_plan ctx_primary_filtered "$primary_apko" TRUSTED=true "${PUSH_MAIN[@]}"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .builder] | unique | join(",")' 'docker'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .sha_tag] | unique | join(",")' "docker-$SHA"
+
+run_plan ctx_primary_docker "$ctx" TRUSTED=true "${PUSH_MAIN[@]}"
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .kind] | unique | join(",")' 'apko'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "split") | .sha_tag] | unique | join(",")' "apko-$SHA"
+
+# Invalid runner_profile and events values fail the plan before any output.
+for change in \
+  '.images.heavy.builders.docker.runner_profile = "audit-test-runner"' \
+  '.images.light.builders.docker.runner_profile = "oplabs-ubuntu-x86"' \
+  '.images.split.builders.apko.runner_profile = null' \
+  '.images.split.builders.apko.runner_profile = ["large"]' \
+  '.images.light.builders.docker.events = "push"' \
+  '.images.light.builders.docker.events = []' \
+  '.images.light.builders.docker.events = null' \
+  '.images.light.builders.docker.events = ["merge_group"]' \
+  '.images.light.builders.docker.events = ["push", "tag"]' \
+  '.images.split.builders.apko.events = [1]'; do
+  jq "$change" "$ctx" > "$TEST_DIR/rejected-ctx.json"
+  : > "$TEST_DIR/rejected-ctx.out"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/rejected-ctx.out" "${PUSH_MAIN[@]}" TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/rejected-ctx.json" > "$TEST_DIR/rejected-ctx.log" 2>&1; then
+    fail "planner accepted invalid builder configuration: $change"
+  fi
+  if [[ -s "$TEST_DIR/rejected-ctx.out" ]]; then
+    fail "planner emitted outputs for invalid builder configuration: $change"
+  fi
+done
+
 echo "plan-images tests passed"

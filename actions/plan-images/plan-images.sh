@@ -73,6 +73,8 @@ def kv_obj:
     | add // {}
   end;
 
+def build_events: ["pull_request", "push", "schedule", "release", "workflow_dispatch"];
+
 def apko_arch_name:
   if . == "x86_64" then "amd64" elif . == "aarch64" then "arm64" else . end;
 
@@ -138,7 +140,9 @@ def norm_builders($n; $b):
           ldflags: ($b.docker.ldflags // []),
           env: ($b.docker.env // []),
           tag_prefix: ($b.docker.tag_prefix // null),
-          archs: ($b.docker.archs // null)
+          archs: ($b.docker.archs // null),
+          runner_profile: (if ($b.docker | has("runner_profile")) then $b.docker.runner_profile else "standard" end),
+          events: (if ($b.docker | has("events")) then $b.docker.events else build_events end)
         }} else {} end)
     + (if $b.apko then {apko: {
           needs_packages: ($b.apko.needs_packages // []),
@@ -146,7 +150,9 @@ def norm_builders($n; $b):
           configs: (if ($b.apko.configs // null) != null then
                       [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // "")}]
                     else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end),
-          archs: ($b.apko.archs // null)
+          archs: ($b.apko.archs // null),
+          runner_profile: (if ($b.apko | has("runner_profile")) then $b.apko.runner_profile else "standard" end),
+          events: (if ($b.apko | has("events")) then $b.apko.events else build_events end)
         }} else {} end);
 
 def norm_smoke($s):
@@ -193,6 +199,14 @@ def validate_image($n; $pkgs):
       then error("image \($n): primary \($i.primary) has no matching builder") else . end
   | if ([(.builders | to_entries[]) | (.value.tag_prefix // "") | select(test("^[a-zA-Z0-9.-]*$") | not)] | length) > 0
       then error("image \($n): builders tag_prefix may only contain letters, digits, dot, dash") else . end
+  | ([(.builders | to_entries[]) | select(is_one_of(.value.runner_profile; ["standard", "large"]) | not) | .key]) as $bad_runner
+  | if ($bad_runner | length) > 0
+      then error("image \($n): builders.\($bad_runner[0]).runner_profile must be standard or large") else . end
+  | ([(.builders | to_entries[])
+      | select((.value.events | type) != "array" or (.value.events | length) == 0 or any(.value.events[]; is_one_of(.; build_events) | not))
+      | .key]) as $bad_events
+  | if ($bad_events | length) > 0
+      then error("image \($n): builders.\($bad_events[0]).events must be a non-empty array of pull_request, push, schedule, release, workflow_dispatch") else . end
   | if ($i.archs | length) == 0 or ([$i.archs[] | select(is_one_of(.; ["amd64", "arm64"]) | not)] | length) > 0
       then error("image \($n): archs must be a non-empty subset of amd64, arm64") else . end
   | ([(.builders | to_entries[])
@@ -340,6 +354,9 @@ def runner_for($profile; $arch):
   elif $profile == "large" and $arch == "x86_64" then "oplabs-ubuntu-x86"
   elif $profile == "large" and $arch == "aarch64" then "oplabs-ubuntu-arm"
   else error("unsupported runner profile or architecture: \($profile) \($arch)") end;
+
+def builder_runner($b; $arch):
+  runner_for($b.runner_profile; if $arch == "amd64" then "x86_64" else "aarch64" end);
 
 def sanitize_ref: gsub("[^a-zA-Z0-9.]"; "-");
 def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
@@ -649,6 +666,46 @@ plan_changed() {
   mapfile -t SELECT_PACKAGES < <(printf '%s\n' "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}" | sed '/^$/d' | sort -u)
 }
 
+plan_context() {
+  if [[ "$REF_TYPE" == "tag" ]]; then
+    echo "release"
+    return 0
+  fi
+  case "$EVENT_NAME" in
+    pull_request|pull_request_target|merge_group) echo "pull_request" ;;
+    *) echo "$EVENT_NAME" ;;
+  esac
+}
+
+# Keeps the builders whose events include the context and drops selected images left with none.
+filter_builders_by_context() {
+  local context="$1" n b kept=()
+  for n in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+    [[ -n "$n" ]] || continue
+    while IFS= read -r b; do
+      [[ -n "$b" ]] || continue
+      echo "::notice::Image $n builder $b is not planned for the $context context"
+    done < <(jq -r --arg n "$n" --arg ctx "$context" \
+      '.images[$n].builders | to_entries[] | select(.value.events | index($ctx) | not) | .key' "$MODEL")
+  done
+  jq -c --arg ctx "$context" \
+    '.images |= with_entries(.value.builders |= with_entries(select(.value.events | index($ctx))))' \
+    "$MODEL" > "$WORK/model-context.json"
+  mv "$WORK/model-context.json" "$MODEL"
+  for n in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+    [[ -n "$n" ]] || continue
+    if jq -e --arg n "$n" '(.images[$n].builders | length) > 0' "$MODEL" >/dev/null; then
+      kept+=("$n")
+    else
+      echo "::notice::Image $n has no builder planned for the $context context; skipped"
+    fi
+  done
+  SELECT_IMAGES=()
+  for n in "${kept[@]+"${kept[@]}"}"; do
+    SELECT_IMAGES+=("$n")
+  done
+}
+
 to_json_array() {
   printf '%s\n' "$@" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique'
 }
@@ -680,6 +737,8 @@ main() {
     echo "Event $EVENT_NAME: planning the full catalog"
     load_all
   fi
+
+  filter_builders_by_context "$(plan_context)"
 
   if [[ "$TRUSTED" != "true" ]]; then
     local skipped_name
@@ -803,7 +862,7 @@ main() {
                     builder: "docker",
                     kind: "docker-arch",
                     arch: $a,
-                    runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
+                    runner: builder_runner($i.builders.docker; $a),
                     mode: $i.builders.docker.mode,
                     context: $i.builders.docker.context,
                     dockerfile: $i.builders.docker.dockerfile,
@@ -827,7 +886,7 @@ main() {
                       kind: "apko",
                       arch: "",
                       archs: ($i.builders.apko.archs | join(",")),
-                      runner: "ubuntu-24.04",
+                      runner: builder_runner($i.builders.apko; "amd64"),
                       mode: "",
                       context: "",
                       dockerfile: "",
@@ -850,7 +909,7 @@ main() {
                   kind: "ko",
                   arch: "",
                   archs: ($i.builders.docker.archs | join(",")),
-                  runner: "ubuntu-24.04",
+                  runner: builder_runner($i.builders.docker; "amd64"),
                   mode: "ko",
                   context: $i.builders.docker.context,
                   dockerfile: "",
