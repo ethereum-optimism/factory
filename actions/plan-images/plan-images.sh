@@ -167,6 +167,12 @@ def norm_image($n):
       else (.builders | keys)[0]
       end);
 
+def tag_list($what):
+  if type != "array" then error("\($what) must be an array of tag names") else . end
+  | if any(.[]; (type != "string") or (test("^[a-zA-Z0-9.-]+$") | not))
+      then error("\($what) entries must be non-empty and contain only letters, digits, dot, dash") else . end
+  | reduce .[] as $t ([]; if any(.[]; . == $t) then . else . + [$t] end);
+
 def validate_image($n; $pkgs):
   . as $i
   | if ($n | test("^[a-z0-9][a-z0-9._-]*$")) | not
@@ -216,6 +222,7 @@ def normalize_v2:
   | if (((.tag_prefix // "") | tostring) | test("^[a-zA-Z0-9.-]*$")) | not
       then error("tag_prefix may only contain letters, digits, dot, dash") else . end
   | . as $c
+  | (if $c | has("default_branch_tags") then ($c.default_branch_tags | tag_list("default_branch_tags")) else [] end) as $top_tags
   | (reduce (($c.packages // {}) | to_entries[]) as $e ({};
         .[$e.key] = ($e.value | norm_package($e.key) | validate_package($e.key)))) as $pkgs
   | ($pkgs | keys) as $pkgnames
@@ -223,6 +230,7 @@ def normalize_v2:
       version: 2,
       registry: ($c.registry // ""),
       tag_prefix: ($c.tag_prefix // ""),
+      default_branch_tags: $top_tags,
       release: ({
           tag_regex: "^([^/]+)/(v.+)$",
           service_match: 1,
@@ -235,7 +243,10 @@ def normalize_v2:
       packages: $pkgs,
       hooks: {pre_build: ($c.hooks.pre_build // "")},
       images: (reduce (($c.images // {}) | to_entries[]) as $e ({};
-          .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames))))
+          .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames)
+            | . + {default_branch_tags: (if ($e.value | has("default_branch_tags"))
+                then ($e.value.default_branch_tags | tag_list("images.\($e.key).default_branch_tags"))
+                else $top_tags end)})))
     }
   | if (.release.tag_regex | type) != "string" then error("release.tag_regex must be a string") else . end
   | if (.hooks.pre_build | type) != "string" then error("hooks.pre_build must be a string") else . end;
@@ -343,6 +354,8 @@ def ko_fields($hook; $d; $ver): if $d.mode == "ko" then {
     ldflags: ($d.ldflags | join("\n")),
     env: pkg_env(merge_args($hook; {}); (release_env($d.env; $ver) | join("\n")))
   } else {} end;
+def alias_tags_for($on; $tags; $prefix; $sfx): if $on then ($tags | map($prefix + . + $sfx)) else [] end;
+def with_alias($tags): if ($tags | length) > 0 then . + {alias_tags: ($tags | join(","))} else . end;
 JQ
 
 # Normalize the catalog into the version 2 model at $MODEL.
@@ -672,6 +685,11 @@ main() {
     done
   fi
 
+  local default_branch_run=false
+  if [[ "$TRUSTED" == "true" && "$REF_TYPE" == "branch" ]]; then
+    default_branch_run=true
+  fi
+
   local images_json packages_json
   images_json=$(to_json_array "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}")
   packages_json=$(to_json_array "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}")
@@ -685,6 +703,7 @@ main() {
     --argjson images "$images_json" \
     --argjson pkgs "$packages_json" \
     --argjson trusted "$TRUSTED" \
+    --argjson alias_on "$default_branch_run" \
     --argjson hook "$hook_kv" \
     --arg sha "$HEAD_SHA" \
     --arg ref_name "$PUBLISH_TAG" \
@@ -812,7 +831,7 @@ main() {
                       sha_tag: (prefix_for($m; $i; "apko") + $sha + $v.tag_suffix),
                       ref_tag: (prefix_for($m; $i; "apko") + ($ref_name | sanitize_ref) + $v.tag_suffix),
                       registry: $m.registry
-                    }
+                    } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "apko"); $v.tag_suffix))
                 ] else [] end)
               + (if $i.builders.docker and $i.builders.docker.mode == "ko" then [{
                   id: "\($n)-ko",
@@ -835,7 +854,7 @@ main() {
                   sha_tag: (prefix_for($m; $i; "docker") + $sha),
                   ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                   registry: $m.registry
-                } + ko_fields($hook; $i.builders.docker; $version)] else [] end)
+                } + ko_fields($hook; $i.builders.docker; $version) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
             ) | .[]
           end
         ]) as $publish
@@ -851,7 +870,7 @@ main() {
                 ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                 pushed_pattern: "pushed-\($n)-docker-*",
                 final_artifact: "final-\($n)-docker"
-              }
+              } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))
           end
         ]) as $manifest
       | ([ if $trusted | not then empty else

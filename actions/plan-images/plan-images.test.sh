@@ -923,4 +923,104 @@ assert_eq "$(out_value "$OUT" selected_images)" "" "negated sub-path inside a po
 neg_change shared go.mod
 assert_eq "$(out_value "$OUT" selected_images)" "svc,web" "positive shared path still plans the full catalog"
 
+# --- Default-branch alias tags -----------------------------------------------
+
+alias_cat="$TEST_DIR/alias.json"
+cat > "$alias_cat" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "default_branch_tags": ["latest"],
+  "packages": {
+    "stack": {"config": "melange/stack.yaml", "archs": ["x86_64", "aarch64"]}
+  },
+  "images": {
+    "both": {
+      "builders": {
+        "docker": {"dockerfile": "Dockerfile"},
+        "apko": {
+          "needs_packages": ["stack"],
+          "configs": [
+            {"config": "apko/both.yaml", "tag_suffix": ""},
+            {"config": "apko/both-dev.yaml", "tag_suffix": "-dev"}
+          ]
+        }
+      },
+      "primary": "docker",
+      "paths": ["both/**"],
+      "smoke": {"commands": ["/bin/sh -c true"]}
+    },
+    "solo": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["solo/**"],
+      "default_branch_tags": ["stable", "latest"]
+    },
+    "optout": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["optout/**"],
+      "default_branch_tags": []
+    }
+  }
+}
+JSON
+
+run_plan alias_main "$alias_cat" TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "both-apko") | .alias_tags] | join(",")' 'apko-latest'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "both-apko-dev") | .alias_tags] | join(",")' 'apko-latest-dev'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "both-docker") | .alias_tags] | join(",")' 'latest'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "solo-docker") | .alias_tags] | join(",")' 'stable,latest'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "optout-docker") | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '[.[] | select(.id == "solo-docker") | .ref_tag] | join(",")' 'main'
+
+run_plan alias_feature "$alias_cat" TRUSTED=false GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/feature \
+  GITHUB_REF_NAME=feature GITHUB_REF_TYPE=branch
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+run_plan alias_release "$alias_cat" TRUSTED=true GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/solo/v1.2.3 \
+  GITHUB_REF_NAME=solo/v1.2.3 GITHUB_REF_TYPE=tag
+assert_json "$(matrix manifest_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+assert_json "$(matrix publish_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+assert_json "$(matrix manifest_matrix)" '.[0].ref_tag' 'solo-v1.2.3'
+
+run_plan alias_untrusted "$alias_cat" TRUSTED=false GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/9/merge \
+  GITHUB_REF_NAME=9/merge GITHUB_REF_TYPE=branch
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+# A catalog without the key and one with an empty list plan the same outputs.
+no_key="$TEST_DIR/no-key.json"
+empty_key="$TEST_DIR/empty-key.json"
+jq 'del(.default_branch_tags) | del(.images[].default_branch_tags)' "$alias_cat" > "$no_key"
+jq '.default_branch_tags = [] | del(.images[].default_branch_tags)' "$alias_cat" > "$empty_key"
+run_plan no_key "$no_key" TRUSTED=true
+cp "$OUT" "$TEST_DIR/no-key.plan"
+run_plan empty_key "$empty_key" TRUSTED=true
+cmp -s "$TEST_DIR/no-key.plan" "$OUT" || fail "empty default_branch_tags changed the planned outputs"
+assert_json "$(matrix publish_matrix)" '[.[] | has("alias_tags")] | any' 'false'
+
+for bad in \
+  '.default_branch_tags = [""]' \
+  '.default_branch_tags = ["a/b"]' \
+  '.default_branch_tags = ["a:b"]' \
+  '.default_branch_tags = ["la test"]' \
+  '.default_branch_tags = ["latest@x"]' \
+  '.default_branch_tags = "latest"' \
+  '.default_branch_tags = [1]' \
+  '.default_branch_tags = [null]' \
+  '.images.solo.default_branch_tags = ["a/b"]' \
+  '.images.solo.default_branch_tags = "stable"'; do
+  jq "$bad" "$alias_cat" > "$TEST_DIR/bad-alias.json"
+  : > "$TEST_DIR/bad-alias.out"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/bad-alias.out" GITHUB_EVENT_NAME=workflow_dispatch \
+      GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/bad-alias.json" > "$TEST_DIR/bad-alias.log" 2>&1; then
+    fail "planner accepted invalid default_branch_tags: $bad"
+  fi
+  if [[ -s "$TEST_DIR/bad-alias.out" ]]; then
+    fail "planner emitted outputs for invalid default_branch_tags: $bad"
+  fi
+done
+
 echo "plan-images tests passed"
