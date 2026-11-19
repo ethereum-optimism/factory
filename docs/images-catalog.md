@@ -85,7 +85,13 @@ the publish job completed.
 | `images` | yes | Object keyed by image name. Names match `^[a-z0-9][a-z0-9._-]*$`. |
 
 Patterns: a pattern ending in `/**` matches any file below that directory. Any
-other pattern matches exactly one path.
+other pattern matches exactly one path. A pattern starting with `!` is a
+negative pattern that excludes the paths it matches (`!docs/**`,
+`!svc/README.md`). A changed file matches a list of patterns when it matches at
+least one positive pattern and no negative pattern. A file under only a negated
+path therefore selects nothing, and a change set that mixes a negated file with
+a positive one still selects through the positive file. A list with only
+negative patterns selects nothing. This applies to `paths` and `shared_paths`.
 
 ### Release tags
 
@@ -133,11 +139,31 @@ secrets and no OIDC token.
 
 `docker`:
 
-- `mode`: `build` (Dockerfile, default) or `bake` (bake file).
+- `mode`: `build` (Dockerfile, default), `bake` (bake file), or `ko` (Go package built with ko).
 - `context`, `dockerfile`, `target`, `build_args` (object), `bake_file`, `set` (bake variables as `KEY=VALUE` strings).
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
+
+ko mode fields (`dockerfile`, `target`, `build_args`, `bake_file`, and `set` do
+not apply to ko):
+
+- `context`: the Go module directory, relative to the repository root. ko runs from it.
+- `importpath`: the Go package to build, relative to `context` (default `./cmd`).
+- `ko_config`: a ko configuration file, relative to the repository root, for
+  example `.ko.yaml`. Empty (the default) uses ko's own defaults. The base
+  image comes from `defaultBaseImage` in that file, as before.
+- `go_version_file`: the `go.mod` that selects the Go toolchain, relative to the
+  repository root (default `<context>/go.mod`).
+- `ldflags`: array of `go build` ldflags values. Each entry is passed as one
+  `--ldflags` value. ko splits a value on commas, so entries must not contain commas.
+- `env`: array of `KEY=VALUE` strings exported for the ko build. The pairs from
+  `hooks.pre_build` are exported too, before these.
+
+Untrusted runs build ko images for `linux/amd64` into a tarball with
+`--push=false`, load it into the Docker daemon, and smoke test it. The build
+uses no registry login and no credentials. ko pulls its base image anonymously,
+the same way a Dockerfile pulls `FROM`.
 
 `apko`:
 
@@ -229,10 +255,14 @@ Trusted runs:
 
 - publish with the `release` environment: docker architectures are built
   natively and pushed by digest, apko images are published for all catalog
-  architectures in one `apko publish`;
-- merge docker manifest lists and attest apko images and manifest lists;
+  architectures in one `apko publish`, and ko images are published for all
+  catalog architectures in one `ko build --platform` (no manifest job);
+- merge docker manifest lists and attest apko and ko images and manifest lists;
 - smoke test every architecture of the pushed digest (amd64 on the standard
   runner, arm64 on the arm runner), pulling by digest.
+
+A ko image publishes `<registry>/<image>` with no path suffix, under the
+`<sha_tag>` and `<ref_tag>` tags.
 
 ## Legacy catalogs
 
@@ -244,15 +274,20 @@ alone.
 - An image in both files becomes a dual-builder image with `docker` primary.
 - `melange` becomes `packages`, `needs_melange` becomes `needs_packages`,
   `apko_configs` becomes `configs`, and `nexus_paths` join `paths`.
+- `mode: ko` becomes a ko builder: `ko_working_directory` becomes `context`,
+  `ko_importpath` becomes `importpath` (default `./cmd`), `ko_go_version_file`
+  becomes `go_version_file`, and `env` becomes `env`. `ko_config` is set to
+  `.ko.yaml` at the repository root, which is where the legacy workflow read
+  the ko configuration.
 - `shared_<type>_paths` apply to images whose `type` matches.
 - Legacy release tags keep the legacy publish formula: legacy release
   configuration that sets `publish_tag` to `${version}` still publishes
   `v1.2.3`. Set `release.publish_tag` explicitly when converting a catalog.
 
 Not supported, and rejected with an error: `apko_images`, `groups`, `mode`
-values `ko` and `apko` in `images.json`, the `env` field in `images.json`,
-`default_runners`, and `runners` on a melange entry. A version 2 catalog
-ignores `images.apko.json`.
+values other than `build`, `bake`, and `ko` in `images.json`, the `env` field
+in `images.json` for any mode other than `ko`, `default_runners`, and `runners`
+on a melange entry. A version 2 catalog ignores `images.apko.json`.
 
 ### Migration note: apko tag prefix in legacy catalogs
 

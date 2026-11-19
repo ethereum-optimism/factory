@@ -1,15 +1,16 @@
 name: 'Publish image'
 description: >
-  Publish one image to the registry and print its digest. Three kinds:
+  Publish one image to the registry and print its digest. Four kinds:
   apko publishes a multi-architecture image with apko publish inside the pinned
-  Wolfi SDK image; docker-arch builds one architecture natively and pushes it by
-  digest; docker-manifest merges the per-architecture digests into the tagged
-  manifest list. The calling job performs the registry login for docker kinds,
-  and passes the registry token for the apko kind.
+  Wolfi SDK image; ko publishes a multi-architecture image with ko build for
+  every architecture in one invocation; docker-arch builds one architecture
+  natively and pushes it by digest; docker-manifest merges the per-architecture
+  digests into the tagged manifest list. The calling job performs the registry
+  login for docker kinds, and passes the registry token for the apko kind.
 
 inputs:
   kind:
-    description: 'apko, docker-arch, or docker-manifest.'
+    description: 'apko, ko, docker-arch, or docker-manifest.'
     required: true
   registry:
     description: 'Registry prefix without trailing slash, for example us-docker.pkg.dev/project/repo.'
@@ -76,6 +77,22 @@ inputs:
     default: ''
   digests_dir:
     description: 'docker-manifest kind only: directory holding the per-architecture digest files.'
+    required: false
+    default: ''
+  importpath:
+    description: 'ko kind only: Go package to build, relative to the context.'
+    required: false
+    default: ''
+  ko_config:
+    description: 'ko kind only: ko configuration file, relative to the repository root. Empty uses ko defaults.'
+    required: false
+    default: ''
+  ldflags:
+    description: 'ko kind only: one go build ldflags value per line.'
+    required: false
+    default: ''
+  env:
+    description: 'ko kind only: environment for the ko build, KEY=VALUE per line.'
     required: false
     default: ''
 
@@ -168,6 +185,61 @@ runs:
           "$APKO_SANDBOX" -c "$apko_script"
 
         ref="$(tail -n 1 "${out_dir}/publish.digest")"
+        echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
+
+    - name: Publish with ko
+      id: ko
+      if: inputs.kind == 'ko'
+      shell: bash
+      env:
+        KO_CONTEXT: ${{ inputs.context }}
+        KO_IMPORTPATH: ${{ inputs.importpath }}
+        KO_CONFIG: ${{ inputs.ko_config }}
+        KO_LDFLAGS: ${{ inputs.ldflags }}
+        KO_ENV: ${{ inputs.env }}
+        KO_ARCHS: ${{ inputs.archs }}
+        KO_REPO: ${{ inputs.registry }}/${{ inputs.image }}
+        KO_SHA_TAG: ${{ inputs.sha_tag }}
+        KO_REF_TAG: ${{ inputs.ref_tag }}
+        KO_BUILD_ROOT: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        out_dir="$(mktemp -d "${KO_BUILD_ROOT}/ko-publish.XXXXXX")"
+
+        platforms=""
+        IFS=',' read -ra archs <<< "$KO_ARCHS"
+        for arch in "${archs[@]}"; do
+          arch="${arch// /}"
+          platforms="${platforms}linux/${arch},"
+        done
+        platforms="${platforms%,}"
+
+        ko_args=(build --bare --sbom=spdx --platform="$platforms" --tags="${KO_SHA_TAG},${KO_REF_TAG}")
+        while IFS= read -r flag; do
+          if [ -n "$flag" ]; then
+            ko_args+=("--ldflags=${flag}")
+          fi
+        done <<< "$KO_LDFLAGS"
+
+        if [ -n "$KO_CONFIG" ]; then
+          export KO_CONFIG_PATH="${GITHUB_WORKSPACE}/${KO_CONFIG}"
+        fi
+        while IFS= read -r entry; do
+          if [ -n "$entry" ]; then
+            key="${entry%%=*}"
+            export "${key}=${entry#*=}"
+          fi
+        done <<< "$KO_ENV"
+
+        export KO_DOCKER_REPO="$KO_REPO"
+        cd "${GITHUB_WORKSPACE}/${KO_CONTEXT}"
+        ko "${ko_args[@]}" "$KO_IMPORTPATH" > "${out_dir}/publish.out"
+
+        ref="$(tail -n 1 "${out_dir}/publish.out")"
+        if [[ "$ref" != "${KO_REPO}@sha256:"* ]]; then
+          echo "::error::ko did not print a published reference for ${KO_REPO}; got: '$ref'" >&2
+          exit 1
+        fi
         echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
 
     - name: Push architecture with docker build
@@ -265,6 +337,7 @@ runs:
       env:
         KIND: ${{ inputs.kind }}
         APKO_DIGEST: ${{ steps.apko.outputs.digest }}
+        KO_DIGEST: ${{ steps.ko.outputs.digest }}
         BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
         BAKE_TARGET: ${{ inputs.target }}
@@ -276,6 +349,9 @@ runs:
         case "$KIND" in
           apko)
             digest="$APKO_DIGEST"
+            ;;
+          ko)
+            digest="$KO_DIGEST"
             ;;
           docker-arch)
             if [ -n "$BUILD_DIGEST" ]; then

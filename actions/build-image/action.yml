@@ -2,7 +2,8 @@ name: 'Build image'
 description: >
   Build one image for amd64 and load it into the local Docker daemon under
   local_ref, for smoke testing. The docker builder runs docker/build-push-action
-  or docker/bake-action with load enabled. The apko builder runs apko build
+  or docker/bake-action with load enabled, or ko writes an image tarball that is
+  then loaded. The apko builder runs apko build
   inside the pinned Wolfi SDK image, then docker load. Uses no registry
   credentials and no OIDC token.
 
@@ -17,7 +18,7 @@ inputs:
     description: 'Local image tag to load into the Docker daemon.'
     required: true
   mode:
-    description: 'docker builder only: build (Dockerfile) or bake (bake file).'
+    description: 'docker builder only: build (Dockerfile), bake (bake file), or ko (Go package).'
     required: false
     default: 'build'
   context:
@@ -50,6 +51,22 @@ inputs:
     default: ''
   repositories:
     description: 'apko builder only: comma-separated APK repository directories from stage-packages.'
+    required: false
+    default: ''
+  importpath:
+    description: 'docker builder only, ko mode: Go package to build, relative to the context.'
+    required: false
+    default: ''
+  ko_config:
+    description: 'docker builder only, ko mode: ko configuration file, relative to the repository root. Empty uses ko defaults.'
+    required: false
+    default: ''
+  ldflags:
+    description: 'docker builder only, ko mode: one go build ldflags value per line.'
+    required: false
+    default: ''
+  env:
+    description: 'docker builder only, ko mode: environment for the ko build, KEY=VALUE per line.'
     required: false
     default: ''
 
@@ -105,6 +122,51 @@ runs:
           *.platform=linux/amd64
           *.cache-from=type=gha,scope=${{ inputs.image }}-docker-amd64
           ${{ inputs.set }}
+
+    - name: Build image (ko)
+      if: inputs.builder == 'docker' && inputs.mode == 'ko'
+      shell: bash
+      env:
+        KO_CONTEXT: ${{ inputs.context }}
+        KO_IMPORTPATH: ${{ inputs.importpath }}
+        KO_CONFIG: ${{ inputs.ko_config }}
+        KO_LDFLAGS: ${{ inputs.ldflags }}
+        KO_ENV: ${{ inputs.env }}
+        KO_IMAGE: ${{ inputs.image }}
+        KO_LOCAL_REF: ${{ inputs.local_ref }}
+        KO_BUILD_ROOT: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        out_dir="$(mktemp -d "${KO_BUILD_ROOT}/ko-build.XXXXXX")"
+        tarball="${out_dir}/image.tar"
+
+        ko_args=(build --push=false --tarball "$tarball" --platform=linux/amd64 --bare --sbom=none)
+        while IFS= read -r flag; do
+          if [ -n "$flag" ]; then
+            ko_args+=("--ldflags=${flag}")
+          fi
+        done <<< "$KO_LDFLAGS"
+
+        if [ -n "$KO_CONFIG" ]; then
+          export KO_CONFIG_PATH="${GITHUB_WORKSPACE}/${KO_CONFIG}"
+        fi
+        while IFS= read -r entry; do
+          if [ -n "$entry" ]; then
+            key="${entry%%=*}"
+            export "${key}=${entry#*=}"
+          fi
+        done <<< "$KO_ENV"
+
+        export KO_DOCKER_REPO="local/${KO_IMAGE}"
+        cd "${GITHUB_WORKSPACE}/${KO_CONTEXT}"
+        ko "${ko_args[@]}" "$KO_IMPORTPATH"
+
+        loaded="$(docker load -i "$tarball" | sed -n 's/^Loaded image: //p' | tail -n 1)"
+        if [ -z "$loaded" ]; then
+          echo "::error::docker load did not report a loaded image for $KO_LOCAL_REF" >&2
+          exit 1
+        fi
+        docker tag "$loaded" "$KO_LOCAL_REF"
 
     - name: Build image (apko)
       if: inputs.builder == 'apko'
