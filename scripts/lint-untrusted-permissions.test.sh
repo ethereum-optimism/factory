@@ -91,6 +91,11 @@ elif name == "checkout_order":
     text = text[:head] + text[caller_end:]
     verify = text.index("      - name: Verify factory checkout")
     text = text[:verify] + caller_block + text[verify:]
+elif name == "smoke_without_caller_checkout":
+    start = text.index("  smoke:\n")
+    head = text.index("      - name: Checkout caller repository", start)
+    end = text.index("\n      - name:", head + 1) + 1
+    text = text[:head] + text[end:]
 elif name == "selftest_caller_read_only":
     selftest = f"{root}/.github/workflows/build-images-selftest.yaml"
     text_st = open(selftest, encoding="utf-8").read()
@@ -126,6 +131,7 @@ expect_fail latest_in_action ":latest"
 expect_fail workflow_permissions "workflow-level permissions"
 expect_fail secrets_in_result "references secrets"
 expect_fail checkout_order "caller checkout must precede"
+expect_fail smoke_without_caller_checkout "runs smoke-test without a caller checkout"
 expect_fail selftest_caller_read_only "must grant exactly"
 expect_fail privileged_without_trusted_if "unprivileged job must not declare an environment"
 
