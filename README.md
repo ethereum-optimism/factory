@@ -19,6 +19,9 @@ and validate them with service-owned integration tests.
 - `.github/workflows/agent-approval-check.yaml`: reusable workflow. Reports the
   `agent-approval-check` status: pull requests opened by agent accounts need two
   distinct human approvals.
+- `.github/workflows/goreleaser.yaml`: reusable GoReleaser release workflow. Runs
+  `goreleaser release` for a tag and attests build provenance for the checksums
+  of the produced artifacts. See [GoReleaser release](#goreleaser-release).
 - `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
   `renovate-config.json` — shared CVE-only Renovate baseline preset. See
   [Renovate](#renovate).
@@ -77,6 +80,39 @@ The planner is `actions/plan-images`. The step actions are
 pull request against the fixtures in `test/fixtures/`, and
 `scripts/lint-untrusted-permissions.sh` checks the permission and credential
 rules of the workflow and the actions it reaches.
+
+## GoReleaser release
+
+`.github/workflows/goreleaser.yaml` runs GoReleaser for a release tag and
+attests build provenance for the artifacts listed in the `Checksum` entry of
+`artifacts.json`. Pin the workflow by full commit SHA:
+
+```yaml
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ethereum-optimism/factory/.github/workflows/goreleaser.yaml@0000000000000000000000000000000000000000
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+```
+
+Replace the placeholder with the factory commit SHA. The job runs in the
+GitHub environment named by the `environment` input (default `goreleaser`) in the
+calling repository, so that environment must hold the `GORELEASER_KEY` secret. Keep
+it separate from the `release` environment used for image publishing.
+The calling repository's mise configuration must provide `goreleaser`, or the
+`mise-install-args` input must name it.
+
 
 ## `images.json`
 
