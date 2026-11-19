@@ -115,6 +115,27 @@ On a release tag the planner sets `VERSION` to the tag's version (for example
 `build_args`, so it gets no `VERSION`. Runs that are not release tags are
 unchanged, and catalog values pass through as before.
 
+## Commit and date build arguments
+
+Set `git_build_args: true` on a `build` or `ko` docker builder to receive the
+commit being built. The planner adds two values:
+
+- `GIT_COMMIT`: the full SHA the workflow checked out. It is the same SHA used
+  for the `sha` tag.
+- `GIT_DATE`: the committer date of that commit, as `git show -s --format=%cI`
+  prints it: strict ISO 8601 with its offset, for example
+  `2026-11-19T13:00:00+01:00`. For UTC commits git writes `+00:00`, not `Z`.
+
+In `build` mode both are added to `build_args`. In `ko` mode both are added to
+`env`. Untrusted and trusted runs get them alike. A Dockerfile reads them only
+after declaring `ARG GIT_COMMIT` and `ARG GIT_DATE`.
+
+Either value replaces a catalog entry or a `hooks.pre_build` pair with the same
+name. The planner reads the commit from the caller checkout, which the plan
+job already has with full history. `bake` mode does not read `build_args`, so
+`git_build_args: true` with `mode: "bake"` fails the plan. The default is
+`false`, and a catalog without the key plans the same matrices as before.
+
 A tag that does not match `tag_regex`, or names an image that is not in the
 catalog, plans nothing and succeeds. The planner prints a `::notice::` that
 names the tag.
@@ -153,6 +174,7 @@ secrets and no OIDC token.
 
 - `mode`: `build` (Dockerfile, default), `bake` (bake file), or `ko` (Go package built with ko).
 - `context`, `dockerfile`, `target`, `build_args` (object), `bake_file`, `set` (bake variables as `KEY=VALUE` strings).
+- `git_build_args`: boolean, default `false`. Passes the commit and its date to the build. See Commit and date build arguments.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.

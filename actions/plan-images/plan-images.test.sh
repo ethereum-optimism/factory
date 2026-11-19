@@ -1306,4 +1306,89 @@ for change in \
   fi
 done
 
+# --- Commit and date build arguments ---------------------------------------------------
+
+git_repo="$TEST_DIR/git-build-args"
+mkdir -p "$git_repo/widget"
+git -C "$git_repo" init -q
+git -C "$git_repo" config user.email test@example.invalid
+git -C "$git_repo" config user.name test
+echo base > "$git_repo/widget/a.txt"
+git -C "$git_repo" add -A
+GIT_AUTHOR_DATE="2026-11-18T09:00:00Z" GIT_COMMITTER_DATE="2026-11-19T13:00:00+01:00" \
+  git -C "$git_repo" commit -q -m base
+git_sha=$(git -C "$git_repo" rev-parse HEAD)
+git_date="2026-11-19T13:00:00+01:00"
+
+# Without the flag, catalog values pass through and the key itself changes nothing.
+stale_v2="$TEST_DIR/stale-v2.json"
+jq '.images.widget.builders.docker.build_args = {"GIT_COMMIT": "stale", "GIT_DATE": "stale", "FOO": "bar"}' "$v2" > "$stale_v2"
+false_v2="$TEST_DIR/false-v2.json"
+jq '.images.widget.builders.docker.git_build_args = false' "$stale_v2" > "$false_v2"
+pushd "$git_repo" >/dev/null
+run_plan git_flag_absent "$stale_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true
+cp "$OUT" "$TEST_DIR/git-flag-absent.saved"
+run_plan git_flag_false "$false_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true
+cmp -s "$OUT" "$TEST_DIR/git-flag-absent.saved" || fail "git_build_args false changed the plan outputs"
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" 'FOO=bar,GIT_COMMIT=stale,GIT_DATE=stale'
+
+# Flag on: build legs (untrusted), publish legs (trusted push), and release tags all get the commit and committer date.
+git_v2="$TEST_DIR/git-v2.json"
+jq '.images.widget.builders.docker.build_args = {"GIT_COMMIT": "stale", "GIT_DATE": "stale", "FOO": "bar"}
+    | .images.widget.builders.docker.git_build_args = true' "$v2" > "$git_v2"
+expected_args="FOO=bar,GIT_COMMIT=$git_sha,GIT_DATE=$git_date"
+run_plan git_untrusted "$git_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" "$widget_docker_args" "$expected_args"
+run_plan git_trusted "$git_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" "$expected_args"
+run_plan git_release "$git_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" "$expected_args,VERSION=v1.2.3"
+run_plan git_release_untrusted "$git_v2" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=false
+assert_json "$(matrix build_matrix)" "$widget_docker_args" "$expected_args,VERSION=v1.2.3"
+
+# Flag on for ko: the pair goes into env, replacing catalog copies.
+git_ko="$TEST_DIR/git-ko.json"
+jq '.images["ko-app"].builders.docker.env = ["CGO_ENABLED=0", "GIT_COMMIT=stale"]
+    | .images["ko-app"].builders.docker.git_build_args = true' "$ko_v2" > "$git_ko"
+run_plan git_ko_untrusted "$git_ko" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" '.[0].env | split("\n") | join(",")' "CGO_ENABLED=0,GIT_COMMIT=$git_sha,GIT_DATE=$git_date"
+run_plan git_ko_trusted "$git_ko" GITHUB_SHA="$git_sha" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0].env | split("\n") | join(",")' "CGO_ENABLED=0,GIT_COMMIT=$git_sha,GIT_DATE=$git_date"
+popd >/dev/null
+
+# Flag on without a commit in the checkout fails the plan.
+mkdir -p "$TEST_DIR/no-git"
+pushd "$TEST_DIR/no-git" >/dev/null
+if env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$TEST_DIR/no-git.out" GITHUB_SHA="$git_sha" \
+    GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch \
+    TRUSTED=true bash "$PLAN" "$git_v2" > "$TEST_DIR/no-git.log" 2>&1; then
+  fail "planner accepted git_build_args without a commit in the checkout"
+fi
+grep -q 'git_build_args needs commit' "$TEST_DIR/no-git.log" || fail "missing git_build_args commit error"
+popd >/dev/null
+
+# Bake mode and non-boolean values are rejected.
+reject_git_change() {
+  local change="$1" want="$2"
+  jq "$change" "$v2" > "$TEST_DIR/git-bad.json"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/git-bad.out" GITHUB_EVENT_NAME=workflow_dispatch \
+      GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/git-bad.json" > "$TEST_DIR/git-bad.log" 2>&1; then
+    fail "planner accepted $change"
+  fi
+  grep -q "$want" "$TEST_DIR/git-bad.log" || fail "missing error '$want' for $change"
+}
+reject_git_change '.images.widget.builders.docker.mode = "bake" | .images.widget.builders.docker.git_build_args = true' \
+  'git_build_args is not supported for mode bake'
+reject_git_change '.images.widget.builders.docker.git_build_args = "yes"' \
+  'builders.docker.git_build_args must be a boolean'
+
 echo "plan-images tests passed"

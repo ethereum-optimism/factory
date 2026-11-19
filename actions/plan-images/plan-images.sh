@@ -138,6 +138,10 @@ def norm_builders($n; $b):
   | ($b | keys - ["apko", "docker"]) as $unknown
   | if ($unknown | length) > 0 then error("image \($n): unknown builder \($unknown[0])") else . end
   | if ($b | length) == 0 then error("image \($n): at least one builder is required") else . end
+  | if ($b.docker | type) == "object" and ($b.docker | has("git_build_args")) and (($b.docker.git_build_args | type) != "boolean")
+      then error("image \($n): builders.docker.git_build_args must be a boolean") else . end
+  | if ($b.docker | type) == "object" and ($b.docker.git_build_args == true) and (($b.docker.mode // "build") == "bake")
+      then error("image \($n): git_build_args is not supported for mode bake") else . end
   | {}
     + (if $b.docker then {docker: {
           mode: ($b.docker.mode // "build"),
@@ -145,6 +149,7 @@ def norm_builders($n; $b):
           dockerfile: ($b.docker.dockerfile // "Dockerfile"),
           target: ($b.docker.target // ""),
           build_args: ($b.docker.build_args | kv_obj),
+          git_build_args: ($b.docker.git_build_args // false),
           bake_file: ($b.docker.bake_file // "docker-bake.hcl"),
           set: ($b.docker.set | lines_arr),
           importpath: ($b.docker.importpath // "./cmd"),
@@ -387,12 +392,17 @@ def version_build_arg($d; $ver):
   if $d.mode == "build" and $ver != "" then $d.build_args + {VERSION: $ver}
   else $d.build_args
   end;
-def ko_fields($hook; $d; $ver): if $d.mode == "ko" then {
+def git_build_args($d; $sha; $date): if $d.git_build_args == true then {GIT_COMMIT: $sha, GIT_DATE: $date} else {} end;
+def git_env($env; $d; $sha; $date): if $d.git_build_args == true
+  then [$env[] | select((startswith("GIT_COMMIT=") or startswith("GIT_DATE=")) | not)] + ["GIT_COMMIT=" + $sha, "GIT_DATE=" + $date]
+  else $env
+  end;
+def ko_fields($hook; $d; $ver; $sha; $date): if $d.mode == "ko" then {
     importpath: $d.importpath,
     ko_config: $d.ko_config,
     go_version_file: $d.go_version_file,
     ldflags: ($d.ldflags | join("\n")),
-    env: pkg_env(merge_args($hook; {}); (release_env($d.env; $ver) | join("\n")))
+    env: pkg_env(merge_args($hook; {}); (git_env(release_env($d.env; $ver); $d; $sha; $date) | join("\n")))
   } else {} end;
 def alias_tags_for($on; $tags; $prefix; $sfx): if $on then ($tags | map($prefix + . + $sfx)) else [] end;
 def with_alias($tags): if ($tags | length) > 0 then . + {alias_tags: ($tags | join(","))} else . end;
@@ -779,6 +789,15 @@ main() {
   local registry
   registry=$(jq -r '.registry' "$MODEL")
 
+  local git_sha="" git_date=""
+  if jq -e 'any(.images[]?; .builders.docker.git_build_args == true)' "$MODEL" >/dev/null; then
+    git_sha=$(git rev-parse --verify "${HEAD_SHA}^{commit}") || {
+      echo "::error::git_build_args needs commit $HEAD_SHA in the checkout" >&2
+      exit 1
+    }
+    git_date=$(git show -s --format=%cI "$git_sha")
+  fi
+
   local outputs
   outputs=$(jq -c -n \
     --slurpfile m "$MODEL" \
@@ -788,6 +807,8 @@ main() {
     --argjson alias_on "$default_branch_run" \
     --argjson hook "$hook_kv" \
     --arg sha "$HEAD_SHA" \
+    --arg git_sha "$git_sha" \
+    --arg git_date "$git_date" \
     --arg ref_name "$PUBLISH_TAG" \
     --arg version "$VERSION" \
     --arg source_ref_override "$SOURCE_REF_OVERRIDE" \
@@ -831,7 +852,7 @@ main() {
                     dockerfile: $i.builders.docker.dockerfile,
                     target: $i.builders.docker.target,
                     bake_file: $i.builders.docker.bake_file,
-                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version)),
+                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version) + git_build_args($i.builders.docker; $git_sha; $git_date)),
                     set: ($i.builders.docker.set | join("\n")),
                     config: "",
                     needs_packages: "",
@@ -839,7 +860,7 @@ main() {
                     has_smoke: has_smoke($i.builders.docker.smoke),
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
                     smoke_script: $i.builders.docker.smoke.script
-                  } + ko_fields($hook; $i.builders.docker; $version)] else [] end)
+                  } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date)] else [] end)
               + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
                   | {
@@ -882,7 +903,7 @@ main() {
                     dockerfile: $i.builders.docker.dockerfile,
                     target: $i.builders.docker.target,
                     bake_file: $i.builders.docker.bake_file,
-                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version)),
+                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version) + git_build_args($i.builders.docker; $git_sha; $git_date)),
                     set: ($i.builders.docker.set | join("\n")),
                     config: "",
                     needs_packages: "",
@@ -937,7 +958,7 @@ main() {
                   sha_tag: (prefix_for($m; $i; "docker") + $sha),
                   ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                   registry: $m.registry
-                } + ko_fields($hook; $i.builders.docker; $version) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
+                } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
             ) | .[]
           end
         ]) as $publish
