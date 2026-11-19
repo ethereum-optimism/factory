@@ -1,0 +1,95 @@
+name: GoReleaser Release (Reusable)
+
+# Runs GoReleaser for a release tag and attaches SLSA build provenance to the
+# checksums of the produced artifacts. Publishing runs in the caller's
+# GitHub environment, which holds the GORELEASER_KEY secret.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Git tag to release. Checked out as refs/tags/<tag>.
+        required: true
+        type: string
+      config:
+        description: Path to the GoReleaser config file, relative to the repository root.
+        required: false
+        type: string
+        default: .goreleaser.yaml
+      environment:
+        description: GitHub environment in the calling repository that holds GORELEASER_KEY.
+        required: false
+        type: string
+        default: release
+      mise-install-args:
+        description: Arguments for mise install, such as a tool name, to install GoReleaser. Empty installs every tool in the repository's mise config.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      GORELEASER_KEY:
+        description: GoReleaser Pro license key. Pass it from the environment named by the environment input.
+        required: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout tag
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up mise
+        uses: jdx/mise-action@c1ecc8f748cd28cdeabf76dab3cccde4ce692fe4 # v4.0.0
+        with:
+          install_args: ${{ inputs.mise-install-args }}
+
+      - name: Release
+        env:
+          CONFIG: ${{ inputs.config }}
+          GORELEASER_CURRENT_TAG: ${{ inputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+        run: goreleaser release --clean -f "$CONFIG"
+
+      - name: Locate checksums
+        id: checksums
+        run: |
+          set -euo pipefail
+          mapfile -t metadata < <(find . -path ./.git -prune -o -name artifacts.json -print)
+          if [ "${#metadata[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one artifacts.json, found ${#metadata[@]}" >&2
+            exit 1
+          fi
+          checksums="$(jq -r '[.[] | select(.type == "Checksum") | .path] | unique | if length == 1 then .[0] else error("expected exactly one Checksum artifact") end' "${metadata[0]}")"
+          path="$checksums"
+          if [ ! -f "$path" ]; then
+            path="$(dirname "${metadata[0]}")/$(basename "$checksums")"
+          fi
+          if [ ! -f "$path" ]; then
+            echo "::error::checksum file $checksums not found" >&2
+            exit 1
+          fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-checksums: ${{ steps.checksums.outputs.path }}
