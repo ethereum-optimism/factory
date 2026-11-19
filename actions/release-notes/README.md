@@ -45,10 +45,13 @@ and attaches the notes. It creates no container image and changes no image tags,
 image bytes, or existing image signatures. The image's signature does not cover
 the separate release-notes attachment.
 
-Authentication defaults to the existing `oplabs-tools-artifacts` GitHub workload
-identity provider. The calling repository must already be trusted by that
-provider and have Artifact Registry write access. Other GCP setups can override
-the authentication inputs below; this workflow does not grant access.
+The publish job runs in the `release` GitHub environment. The calling repository
+must have a `release` environment whose deployment branch or tag policy allows
+the release tags being published. Authentication defaults to the
+`oplabs-tools-artifacts` GitHub workload identity provider that is bound to that
+environment; the calling repository must already be trusted by that provider and
+have Artifact Registry write access. Other GCP setups can override the
+authentication inputs below; this workflow does not grant access.
 
 | Workflow input | Default / purpose |
 |---|---|
@@ -56,7 +59,7 @@ the authentication inputs below; this workflow does not grant access.
 | `release_tag` | The caller's release event tag. Set explicitly for manual backfills. |
 | `image_tag` | Release tag with the matching image-name prefix removed. Override for tags such as `apko-v0.0.13`. |
 | `gcp_project_id` | `oplabs-tools-artifacts`. |
-| `workload_identity_provider` | `projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc`. |
+| `workload_identity_provider` | `projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-release`. |
 | `service_account` | Empty for direct workload identity federation; optionally impersonate a service account. |
 | `wait_seconds` | `900`; accepts 0–1800. Zero performs one image lookup without retries. |
 

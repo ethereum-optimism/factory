@@ -20,9 +20,9 @@ on:
         type: string
         default: oplabs-tools-artifacts
       workload_identity_provider:
-        description: Workload identity provider trusted by the calling repository.
+        description: Workload identity provider trusted by the calling repository's release environment.
         type: string
-        default: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-oidc
+        default: projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-release
       service_account:
         description: Optional service account to impersonate; empty uses direct workload identity federation.
         type: string
@@ -43,6 +43,7 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    environment: release
     permissions:
       contents: read
       id-token: write
