@@ -307,6 +307,11 @@
             "type": "string"
           }
         },
+        "git_build_args": {
+          "type": "boolean",
+          "default": false,
+          "description": "build and ko modes only: pass GIT_COMMIT (the commit being built) and GIT_DATE (its committer date, ISO 8601) as build arguments, or as environment for ko. These replace catalog values with the same names."
+        },
         "bake_file": {
           "type": "string"
         },
