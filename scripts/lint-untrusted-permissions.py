@@ -9,6 +9,9 @@ Every job in the build-images workflow must be one of:
   job), it has no environment, and neither the job nor any composite action it
   reaches mentions a credential or login primitive.
 
+Every job that reaches the smoke-test action must check out the caller
+repository.
+
 Across the checked workflows, every uses: must be pinned to a 40-character
 commit SHA unless it is a local ./ path, and no ":latest" image reference may
 appear in the checked workflows or the actions they reach.
@@ -164,6 +167,18 @@ def check_checkout_order(where, job, errors):
         errors.append(f"{where}: caller checkout must precede the factory checkout")
 
 
+def check_smoke_caller(where, job, names, errors):
+    """A job that reaches smoke-test must check out the caller repository."""
+    if "smoke-test" not in names:
+        return
+    for step in job.get("steps") or []:
+        if not isinstance(step, dict) or not str(step.get("uses", "")).startswith("actions/checkout@"):
+            continue
+        if (step.get("with") or {}).get("path") is None:
+            return
+    errors.append(f"{where}: runs smoke-test without a caller checkout")
+
+
 def check_job_workflow(root, path, errors):
     document = load_yaml(path)
     rel = os.path.relpath(path, root)
@@ -180,6 +195,8 @@ def check_job_workflow(root, path, errors):
             continue
         job_nodes.append(job)
         check_checkout_order(where, job, errors)
+        names = reached_actions(root, job, errors)
+        check_smoke_caller(where, job, names, errors)
         permissions = job.get("permissions")
         environment = job.get("environment")
         condition = str(job.get("if", ""))
@@ -201,7 +218,6 @@ def check_job_workflow(root, path, errors):
                 errors.append(f"{where}: unprivileged permissions must be {{contents: read}}, found {permissions}")
             text = json.dumps(job, sort_keys=True)
             scan_text(rel, text, errors, where)
-            names = reached_actions(root, job, errors)
             check_action_contents(root, names, errors)
         text = json.dumps(job, sort_keys=True)
         if "secrets." in text:

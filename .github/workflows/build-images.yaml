@@ -536,6 +536,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
       - name: Require the factory pin
         env:
           FACTORY_SHA: ${{ job.workflow_sha }}

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+: "${IMAGE:?IMAGE must be set}"
 output="$(docker run --rm --entrypoint selftest-tool "$IMAGE")"
 if [ "$output" != "selftest-tool 1.0.0" ]; then
   echo "unexpected output: $output" >&2

@@ -236,6 +236,10 @@ PATH while the Dockerfile image ships `/bin/tool`:
 }
 ```
 
+Smoke scripts run from the caller checkout, at the path given in the catalog, on
+both untrusted and trusted runs. `IMAGE` is a local tag on untrusted runs and a
+digest reference (`<registry>/<image>@sha256:...`) on trusted runs.
+
 ### Builder events
 
 `events` is an array of contexts. Each value is one of:
