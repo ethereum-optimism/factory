@@ -93,6 +93,15 @@ class ReleaseWorkflowTest(unittest.TestCase):
                 self.execute("release", [subprocess.CompletedProcess([], 0, json.dumps(response))])
         self.assertFalse(self.output.exists())
 
+    def test_publish_job_runs_in_release_environment_with_release_provider(self):
+        document = yaml.safe_load(WORKFLOW.read_text())
+        inputs = document.get(True, document.get("on"))["workflow_call"]["inputs"]
+        self.assertEqual(document["jobs"]["publish"]["environment"], "release")
+        self.assertEqual(
+            inputs["workload_identity_provider"]["default"],
+            "projects/441280564867/locations/global/workloadIdentityPools/github/providers/github-release",
+        )
+
     def test_missing_github_release_fails(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.execute("release", [subprocess.CalledProcessError(1, "gh")])
