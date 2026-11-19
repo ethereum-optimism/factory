@@ -328,12 +328,20 @@ def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $
 def local_ref($id): "local/" + ($id | ascii_downcase) + ":smoke";
 def merge_args($hook; $args): ($hook + $args) | to_entries | map("\(.key)=\(.value)") | join("\n");
 def pkg_env($hook; $env): [$hook, $env] | map(select(. != "")) | join("\n");
-def ko_fields($hook; $d): if $d.mode == "ko" then {
+def release_env($env; $ver):
+  if $ver == "" then $env
+  else [$env[] | select(startswith("VERSION=") | not)] + ["VERSION=" + $ver]
+  end;
+def version_build_arg($d; $ver):
+  if $d.mode == "build" and $ver != "" then $d.build_args + {VERSION: $ver}
+  else $d.build_args
+  end;
+def ko_fields($hook; $d; $ver): if $d.mode == "ko" then {
     importpath: $d.importpath,
     ko_config: $d.ko_config,
     go_version_file: $d.go_version_file,
     ldflags: ($d.ldflags | join("\n")),
-    env: pkg_env(merge_args($hook; {}); ($d.env | join("\n")))
+    env: pkg_env(merge_args($hook; {}); (release_env($d.env; $ver) | join("\n")))
   } else {} end;
 JQ
 
@@ -721,7 +729,7 @@ main() {
                     dockerfile: $i.builders.docker.dockerfile,
                     target: $i.builders.docker.target,
                     bake_file: $i.builders.docker.bake_file,
-                    build_args: merge_args($hook; $i.builders.docker.build_args),
+                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version)),
                     set: ($i.builders.docker.set | join("\n")),
                     config: "",
                     needs_packages: "",
@@ -729,7 +737,7 @@ main() {
                     has_smoke: has_smoke($i.builders.docker.smoke),
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
                     smoke_script: $i.builders.docker.smoke.script
-                  } + ko_fields($hook; $i.builders.docker)] else [] end)
+                  } + ko_fields($hook; $i.builders.docker; $version)] else [] end)
               + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
                   | {
@@ -772,7 +780,7 @@ main() {
                     dockerfile: $i.builders.docker.dockerfile,
                     target: $i.builders.docker.target,
                     bake_file: $i.builders.docker.bake_file,
-                    build_args: merge_args($hook; $i.builders.docker.build_args),
+                    build_args: merge_args($hook; version_build_arg($i.builders.docker; $version)),
                     set: ($i.builders.docker.set | join("\n")),
                     config: "",
                     needs_packages: "",
@@ -827,7 +835,7 @@ main() {
                   sha_tag: (prefix_for($m; $i; "docker") + $sha),
                   ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
                   registry: $m.registry
-                } + ko_fields($hook; $i.builders.docker)] else [] end)
+                } + ko_fields($hook; $i.builders.docker; $version)] else [] end)
             ) | .[]
           end
         ]) as $publish

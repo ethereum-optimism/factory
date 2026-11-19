@@ -227,6 +227,39 @@ run_plan missing_image "$v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/nope/v1
   GITHUB_REF_NAME=nope/v1.0.0 GITHUB_REF_TYPE=tag TRUSTED=true
 assert_json "$(matrix publish_matrix)" 'length' '0'
 
+# --- Release version as a docker build argument ---------------------------------------
+
+build_arg_v2="$TEST_DIR/build-arg-v2.json"
+jq '.images.widget.builders.docker.build_args = {"VERSION": "v0.0.0", "FOO": "bar"}' "$v2" > "$build_arg_v2"
+widget_docker_args='[.[] | select(.image == "widget" and .builder == "docker")][0].build_args | split("\n") | sort | join(",")'
+
+# Release tag, trusted: the version replaces the catalog VERSION and keeps other arguments.
+run_plan build_arg_release "$build_arg_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" 'FOO=bar,VERSION=v1.2.3'
+
+# Release tag, untrusted: the build leg gets the version too.
+run_plan build_arg_release_untrusted "$build_arg_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=false
+assert_json "$(matrix build_matrix)" "$widget_docker_args" 'FOO=bar,VERSION=v1.2.3'
+
+# Release tag without a catalog build_args entry: the version is the only argument.
+run_plan build_arg_release_bare "$v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "widget" and .builder == "docker")][0].build_args' 'VERSION=v1.2.3'
+
+# Main push: no version is injected and the catalog VERSION passes through.
+run_plan build_arg_main "$build_arg_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" 'FOO=bar,VERSION=v0.0.0'
+
+# Bake mode never reads build_args, so a release tag adds nothing to them.
+build_arg_bake="$TEST_DIR/build-arg-bake.json"
+jq '.images.widget.builders.docker.mode = "bake" | .images.widget.builders.docker.build_args = {"FOO": "bar"}' "$v2" > "$build_arg_bake"
+run_plan build_arg_bake_release "$build_arg_bake" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" "$widget_docker_args" 'FOO=bar'
+
 # --- v2 branch dispatch (full plan) -------------------------------------------
 
 run_plan dispatch "$v2" TRUSTED=true
@@ -734,6 +767,18 @@ run_plan ko_release "$ko_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/ko-app/
 assert_json "$(matrix publish_matrix)" '.[0] | [.ref_tag, .sha_tag] | join("|")' "v1.2.3|$SHA"
 assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' 'v1.2.3'
 assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+# Release tag: ko env gets the version and drops a catalog VERSION; main keeps the catalog value.
+ko_version_v2="$TEST_DIR/ko-version-v2.json"
+jq '.images["ko-app"].builders.docker.env = ["CGO_ENABLED=0", "VERSION=v0.0.0"]' "$ko_v2" > "$ko_version_v2"
+run_plan ko_version_release "$ko_version_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/ko-app/v1.2.3 \
+  GITHUB_REF_NAME=ko-app/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0].env | split("\n") | join(",")' 'CGO_ENABLED=0,VERSION=v1.2.3'
+run_plan ko_version_main "$ko_version_v2" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0].env | split("\n") | join(",")' 'CGO_ENABLED=0,VERSION=v0.0.0'
+run_plan ko_release_untrusted "$ko_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/ko-app/v1.2.3 \
+  GITHUB_REF_NAME=ko-app/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=false
+assert_json "$(matrix build_matrix)" '.[0].env | split("\n") | join(",")' 'CGO_ENABLED=0,VERSION=v1.2.3'
 
 # Builder-level archs and smoke override the image-level values.
 ko_amd="$TEST_DIR/ko-amd.json"
