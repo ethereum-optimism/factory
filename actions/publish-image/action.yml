@@ -202,8 +202,8 @@ runs:
         push: true
         set: |
           *.platform=linux/${{ inputs.arch }}
-          *.provenance=mode=max
-          *.sbom=true
+          *.attest=type=provenance,mode=max
+          *.attest=type=sbom
           *.cache-from=type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
           *.cache-to=type=gha,mode=max,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
           *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image }},push=true

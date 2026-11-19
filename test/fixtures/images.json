@@ -22,6 +22,24 @@
         ]
       }
     },
+    "selftest-bake": {
+      "builders": {
+        "docker": {
+          "mode": "bake",
+          "bake_file": "test/fixtures/bake/docker-bake.hcl",
+          "target": "selftest-bake"
+        }
+      },
+      "paths": [
+        "test/fixtures/bake/**",
+        "test/fixtures/docker/**"
+      ],
+      "smoke": {
+        "commands": [
+          "/bin/sh -c true"
+        ]
+      }
+    },
     "selftest-apko": {
       "builders": {
         "apko": {
