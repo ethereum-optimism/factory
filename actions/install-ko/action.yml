@@ -1,0 +1,27 @@
+name: 'Install ko'
+description: >
+  Install the pinned ko release for linux/amd64 and put it on PATH. The release
+  tarball is verified against a pinned sha256 before it is extracted. Uses no
+  registry credentials and no OIDC token.
+
+runs:
+  using: composite
+  steps:
+    - name: Install ko
+      shell: bash
+      env:
+        KO_VERSION: v0.19.1
+        KO_SHA256: 635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
+      run: |
+        set -euo pipefail
+        archive_dir="$(mktemp -d "${RUNNER_TEMP}/ko-archive.XXXXXX")"
+        archive="${archive_dir}/ko.tar.gz"
+        curl -fsSL --retry 5 --retry-all-errors -o "$archive" \
+          "https://github.com/ko-build/ko/releases/download/${KO_VERSION}/ko_${KO_VERSION#v}_Linux_x86_64.tar.gz"
+        echo "${KO_SHA256}  ${archive}" | sha256sum -c -
+        bin_dir="${RUNNER_TEMP}/ko-bin"
+        mkdir -p "$bin_dir"
+        tar -xzf "$archive" -C "$bin_dir" ko
+        chmod +x "${bin_dir}/ko"
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        "${bin_dir}/ko" version

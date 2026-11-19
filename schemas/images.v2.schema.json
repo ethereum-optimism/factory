@@ -56,7 +56,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Changed-file patterns that plan every image and package. A pattern ending in /** matches everything below that directory."
+      "description": "Changed-file patterns that plan every image and package. A pattern ending in /** matches everything below that directory. A pattern starting with ! excludes files: a changed file matches when it matches at least one positive pattern and no negative pattern."
     },
     "packages": {
       "type": "object",
@@ -214,7 +214,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Changed-file patterns that plan this image on pull_request and push."
+          "description": "Changed-file patterns that plan this image on pull_request and push. Same syntax as shared_paths: a leading ! excludes matching files, so a file selects the image only when a positive pattern matches it and no negative pattern does."
         },
         "smoke": {
           "type": "object",
@@ -264,9 +264,10 @@
         "mode": {
           "enum": [
             "build",
-            "bake"
+            "bake",
+            "ko"
           ],
-          "description": "build runs a Dockerfile. bake runs docker-bake.hcl."
+          "description": "build runs a Dockerfile. bake runs docker-bake.hcl. ko builds a Go package with ko into a container image; context is the Go module directory."
         },
         "context": {
           "type": "string"
@@ -293,6 +294,33 @@
             "pattern": "^[^=]+=.*$"
           },
           "description": "bake mode only: KEY=VALUE variables passed to docker/bake-action."
+        },
+        "importpath": {
+          "type": "string",
+          "description": "ko mode only: Go package to build, relative to context. Defaults to ./cmd."
+        },
+        "ko_config": {
+          "type": "string",
+          "description": "ko mode only: ko configuration file (for example .ko.yaml), relative to the repository root. Empty uses ko defaults."
+        },
+        "go_version_file": {
+          "type": "string",
+          "description": "ko mode only: go.mod used by setup-go, relative to the repository root. Defaults to <context>/go.mod."
+        },
+        "ldflags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ko mode only: go build ldflags values, each passed as one --ldflags value. ko splits a value on commas, so values must not contain commas."
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*=.*$"
+          },
+          "description": "ko mode only: environment for the ko build, KEY=VALUE strings."
         },
         "tag_prefix": {
           "type": "string",

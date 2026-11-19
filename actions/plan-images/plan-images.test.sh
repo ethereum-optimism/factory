@@ -380,12 +380,13 @@ if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/unsupported.out" GITHUB_EVENT_NA
     bash "$PLAN" .github/images.json > "$TEST_DIR/unsupported.log" 2>&1; then
   fail "apko_images catalog was accepted"
 fi
-echo '{"images": {"ko-img": {"mode": "ko", "paths": ["x/**"]}}}' > .github/images.json
+echo '{"registry": "registry.example.invalid/images", "images": {"odd-img": {"mode": "pulumi", "paths": ["x/**"]}}}' > .github/images.json
 if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/unsupported2.out" GITHUB_EVENT_NAME=workflow_dispatch \
     GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
     bash "$PLAN" .github/images.json > "$TEST_DIR/unsupported2.log" 2>&1; then
-  fail "ko mode catalog was accepted"
+  fail "unknown legacy mode was accepted"
 fi
+grep -q 'mode pulumi is not supported' "$TEST_DIR/unsupported2.log" || fail "missing unknown legacy mode error"
 popd >/dev/null
 
 # --- Registry requirement -----------------------------------------------------------
@@ -669,5 +670,212 @@ pushd "$hook_env_dir" >/dev/null
 run_plan hook_env catalog.json TRUSTED=true GITHUB_ENV="$TEST_DIR/github-env-file"
 popd >/dev/null
 assert_json "$(matrix packages_matrix)" '.[0].build_env' 'HOOK_ENV_SEEN=unset'
+
+# --- ko builder mode ----------------------------------------------------------------
+
+ko_v2="$TEST_DIR/ko-v2.json"
+cat > "$ko_v2" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "release": {
+    "tag_regex": "^([^/]+)/(v.+)$",
+    "service_match": 1,
+    "version_match": 2,
+    "publish_tag": "${version}",
+    "source_ref": "${ref_name}"
+  },
+  "images": {
+    "ko-app": {
+      "builders": {
+        "docker": {
+          "mode": "ko",
+          "context": "ko-app",
+          "importpath": ".",
+          "ko_config": "ko-app/.ko.yaml",
+          "ldflags": ["-s", "-w"],
+          "env": ["CGO_ENABLED=0"]
+        }
+      },
+      "paths": ["ko-app/**"],
+      "smoke": {"commands": ["/ko-app"], "verify_version": true}
+    }
+  }
+}
+JSON
+
+# Untrusted: one amd64 build leg, no publish, manifest or smoke legs.
+run_plan ko_untrusted "$ko_v2" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=false
+assert_json "$(matrix build_matrix)" 'length' '1'
+assert_json "$(matrix build_matrix)" '.[0] | [.builder, .mode, .arch, .local_ref, .context, .importpath, .ko_config] | join("|")' 'docker|ko|amd64|local/ko-app-docker:smoke|ko-app|.|ko-app/.ko.yaml'
+assert_json "$(matrix build_matrix)" '.[0].ldflags | split("\n") | join(",")' '-s,-w'
+assert_json "$(matrix build_matrix)" '.[0].env' 'CGO_ENABLED=0'
+assert_json "$(matrix publish_matrix)" 'length' '0'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+assert_json "$(matrix smoke_matrix)" 'length' '0'
+
+# Trusted: one multi-platform publish leg, no manifest leg, one smoke leg per arch.
+run_plan ko_trusted "$ko_v2" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=true
+assert_json "$(matrix build_matrix)" 'length' '0'
+assert_json "$(matrix publish_matrix)" 'length' '1'
+assert_json "$(matrix publish_matrix)" '.[0] | [.id, .kind, .archs, .runner, .sha_tag, .ref_tag, .registry] | join("|")' "ko-app-ko|ko|amd64,arm64|ubuntu-24.04|$SHA|main|registry.example.invalid/images"
+assert_json "$(matrix publish_matrix)" '.[0].env' 'CGO_ENABLED=0'
+assert_json "$(matrix publish_matrix)" '.[0].importpath' '.'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+assert_eq "$(out_value "$OUT" has_manifest)" "false" "ko has_manifest"
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'ko-app-ko-amd64,ko-app-ko-arm64'
+assert_json "$(matrix smoke_matrix)" '[.[].final_artifact] | unique | join(",")' 'final-ko-app-ko'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.arch == "arm64") | .runner] | unique | join(",")' 'ubuntu-24.04-arm'
+assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' ''
+
+# Release tag: the version reaches the ko publish tags and both smoke legs.
+run_plan ko_release "$ko_v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/ko-app/v1.2.3 \
+  GITHUB_REF_NAME=ko-app/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0] | [.ref_tag, .sha_tag] | join("|")' "v1.2.3|$SHA"
+assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' 'v1.2.3'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+
+# Builder-level archs and smoke override the image-level values.
+ko_amd="$TEST_DIR/ko-amd.json"
+jq '.images["ko-app"].builders.docker.archs = ["amd64"]
+    | .images["ko-app"].builders.docker.smoke = {"commands": ["/ko-app --version"]}' "$ko_v2" > "$ko_amd"
+run_plan ko_amd64 "$ko_amd" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0].archs' 'amd64'
+assert_json "$(matrix smoke_matrix)" 'length' '1'
+assert_json "$(matrix smoke_matrix)" '.[0] | [.id, .arch, .runner] | join("|")' 'ko-app-ko-amd64|amd64|ubuntu-24.04'
+assert_json "$(matrix smoke_matrix)" '.[0].smoke_commands | fromjson | join(" ")' '/ko-app --version'
+assert_json "$(matrix smoke_matrix)" '.[0].expected_version' ''
+
+# Pre-build hook pairs are exported to the ko build, ahead of the catalog env.
+ko_hook_dir="$TEST_DIR/ko-hook"
+mkdir -p "$ko_hook_dir/scripts"
+printf '#!/usr/bin/env bash\necho KO_HOOK=yes\n' > "$ko_hook_dir/scripts/hook.sh"
+jq '.hooks = {"pre_build": "scripts/hook.sh"}' "$ko_v2" > "$ko_hook_dir/catalog.json"
+pushd "$ko_hook_dir" >/dev/null
+run_plan ko_hook catalog.json GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=true
+popd >/dev/null
+assert_json "$(matrix publish_matrix)" '.[0].env | split("\n") | join(",")' 'KO_HOOK=yes,CGO_ENABLED=0'
+
+# Invalid ko configuration fails the plan.
+for change in \
+  '.images["ko-app"].builders.docker.importpath = ""' \
+  '.images["ko-app"].builders.docker.env = ["NOT_KEY_VALUE"]' \
+  '.images["ko-app"].builders.docker.mode = "pulumi"'; do
+  jq "$change" "$ko_v2" > "$TEST_DIR/ko-bad.json"
+  if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/ko-bad.out" GITHUB_EVENT_NAME=workflow_dispatch \
+      GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+      bash "$PLAN" "$TEST_DIR/ko-bad.json" > "$TEST_DIR/ko-bad.log" 2>&1; then
+    fail "planner accepted invalid ko configuration: $change"
+  fi
+done
+
+# --- Legacy images.json with mode ko -----------------------------------------------
+
+legacy_ko_dir="$TEST_DIR/legacy-ko"
+mkdir -p "$legacy_ko_dir/.github"
+pushd "$legacy_ko_dir" >/dev/null
+cat > .github/images.json <<'JSON'
+{
+  "registry": "registry.example.invalid/images",
+  "images": {
+    "legacy-ko": {
+      "mode": "ko",
+      "ko_working_directory": "svc",
+      "ko_importpath": "./cmd/svc",
+      "ko_go_version_file": "svc/go.mod",
+      "env": "CGO_ENABLED=0\nGOFLAGS=-mod=mod",
+      "paths": ["svc/**"]
+    }
+  }
+}
+JSON
+run_plan legacy_ko_untrusted .github/images.json GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=false
+assert_json "$(matrix build_matrix)" 'length' '1'
+assert_json "$(matrix build_matrix)" '.[0] | [.mode, .context, .importpath, .ko_config, .go_version_file] | join("|")' 'ko|svc|./cmd/svc|.ko.yaml|svc/go.mod'
+assert_json "$(matrix build_matrix)" '.[0].env | split("\n") | join(",")' 'CGO_ENABLED=0,GOFLAGS=-mod=mod'
+run_plan legacy_ko_trusted .github/images.json GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=true
+assert_json "$(matrix publish_matrix)" '.[0] | [.kind, .id, .archs] | join("|")' 'ko|legacy-ko-ko|amd64,arm64'
+assert_json "$(matrix manifest_matrix)" 'length' '0'
+assert_json "$(matrix smoke_matrix)" 'length' '0'
+popd >/dev/null
+
+# Legacy env is accepted for ko only; other legacy modes still reject it.
+echo '{"registry": "registry.example.invalid/images", "images": {"plain": {"env": "A=1", "paths": ["x/**"]}}}' > "$TEST_DIR/legacy-env.json"
+if env -i PATH="$PATH" GITHUB_OUTPUT="$TEST_DIR/legacy-env.out" GITHUB_EVENT_NAME=workflow_dispatch \
+    GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch TRUSTED=true \
+    bash "$PLAN" "$TEST_DIR/legacy-env.json" > "$TEST_DIR/legacy-env.log" 2>&1; then
+  fail "legacy env was accepted for a build mode image"
+fi
+
+# --- Negated path patterns -----------------------------------------------------------
+
+neg_repo="$TEST_DIR/neg-repo"
+mkdir -p "$neg_repo/.github" "$neg_repo/svc/docs" "$neg_repo/docs/private"
+git -C "$neg_repo" init -q
+git -C "$neg_repo" config user.email test@example.invalid
+git -C "$neg_repo" config user.name test
+cat > "$neg_repo/.github/images.json" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "shared_paths": ["!docs/**", "go.mod"],
+  "images": {
+    "svc": {
+      "builders": {"docker": {"context": "svc", "dockerfile": "Dockerfile"}},
+      "paths": ["svc/**", "!svc/docs/**", "!svc/README.md"],
+      "smoke": {"commands": ["svc --version"]}
+    },
+    "web": {
+      "builders": {"docker": {"dockerfile": "Dockerfile"}},
+      "paths": ["docs/**", "!docs/private/**"],
+      "smoke": {"commands": ["web --version"]}
+    }
+  }
+}
+JSON
+echo base > "$neg_repo/svc/main.go"
+echo base > "$neg_repo/svc/README.md"
+echo base > "$neg_repo/svc/docs/guide.md"
+echo base > "$neg_repo/docs/index.md"
+echo base > "$neg_repo/docs/private/notes.md"
+echo base > "$neg_repo/go.mod"
+git -C "$neg_repo" add -A
+git -C "$neg_repo" commit -q -m base
+neg_base=$(git -C "$neg_repo" rev-parse HEAD)
+
+neg_change() {
+  local name="$1"
+  shift
+  local file
+  for file in "$@"; do
+    printf '\n' >> "$neg_repo/$file"
+  done
+  git -C "$neg_repo" add -A
+  git -C "$neg_repo" commit -q -m "$name"
+  local head_sha
+  head_sha=$(git -C "$neg_repo" rev-parse HEAD)
+  printf '{"pull_request":{"base":{"sha":"%s"},"head":{"sha":"%s"}}}' "$neg_base" "$head_sha" > "$TEST_DIR/neg-$name.json"
+  pushd "$neg_repo" >/dev/null
+  run_plan "neg-$name" .github/images.json GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/2/merge \
+    GITHUB_REF_NAME=2/merge GITHUB_REF_TYPE=branch GITHUB_SHA="$head_sha" \
+    GITHUB_EVENT_PATH="$TEST_DIR/neg-$name.json" TRUSTED=false
+  popd >/dev/null
+  git -C "$neg_repo" reset -q --hard "$neg_base"
+}
+
+neg_change excluded-only svc/docs/guide.md
+assert_eq "$(out_value "$OUT" selected_images)" "" "file only under a negated path selects nothing"
+neg_change excluded-readme svc/README.md
+assert_eq "$(out_value "$OUT" selected_images)" "" "negated exact file selects nothing"
+neg_change positive svc/main.go
+assert_eq "$(out_value "$OUT" selected_images)" "svc" "file under a positive path selects its image"
+neg_change mixed svc/docs/guide.md svc/main.go
+assert_eq "$(out_value "$OUT" selected_images)" "svc" "mixed change set selects through the positive file"
+neg_change web-positive docs/index.md
+assert_eq "$(out_value "$OUT" selected_images)" "web" "negated shared pattern does not plan the full catalog"
+neg_change web-excluded docs/private/notes.md
+assert_eq "$(out_value "$OUT" selected_images)" "" "negated sub-path inside a positive path selects nothing"
+neg_change shared go.mod
+assert_eq "$(out_value "$OUT" selected_images)" "svc,web" "positive shared path still plans the full catalog"
 
 echo "plan-images tests passed"

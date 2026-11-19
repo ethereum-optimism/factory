@@ -233,6 +233,17 @@ jobs:
           source: ${{ runner.temp }}/apks
           destination: ${{ runner.temp }}/repos
 
+      - name: Set up Go for ko
+        if: matrix.mode == 'ko'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: ${{ matrix.go_version_file || format('{0}/go.mod', matrix.context) }}
+          cache: false
+
+      - name: Install ko
+        if: matrix.mode == 'ko'
+        uses: ./.factory/actions/install-ko
+
       - name: Build image
         id: build
         uses: ./.factory/actions/build-image
@@ -249,6 +260,10 @@ jobs:
           set: ${{ matrix.set }}
           config: ${{ matrix.config }}
           repositories: ${{ steps.stage.outputs.repositories }}
+          importpath: ${{ matrix.importpath }}
+          ko_config: ${{ matrix.ko_config }}
+          ldflags: ${{ matrix.ldflags }}
+          env: ${{ matrix.env }}
 
       - name: Smoke test
         if: matrix.has_smoke
@@ -354,6 +369,17 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.ar_token.outputs.token }}
 
+      - name: Set up Go for ko
+        if: matrix.mode == 'ko'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: ${{ matrix.go_version_file || format('{0}/go.mod', matrix.context) }}
+          cache: false
+
+      - name: Install ko
+        if: matrix.mode == 'ko'
+        uses: ./.factory/actions/install-ko
+
       - name: Publish image
         id: publish
         uses: ./.factory/actions/publish-image
@@ -376,9 +402,13 @@ jobs:
           build_args: ${{ matrix.build_args }}
           bake_file: ${{ matrix.bake_file }}
           set: ${{ matrix.set }}
+          importpath: ${{ matrix.importpath }}
+          ko_config: ${{ matrix.ko_config }}
+          ldflags: ${{ matrix.ldflags }}
+          env: ${{ matrix.env }}
 
       - name: Attest image provenance
-        if: matrix.kind == 'apko'
+        if: matrix.kind == 'apko' || matrix.kind == 'ko'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ${{ matrix.registry }}/${{ matrix.image }}
@@ -396,7 +426,7 @@ jobs:
           retention-days: 1
 
       - name: Upload final digest
-        if: matrix.kind == 'apko'
+        if: matrix.kind == 'apko' || matrix.kind == 'ko'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: final-${{ matrix.id }}

@@ -78,6 +78,23 @@
         ]
       }
     },
+    "selftest-ko": {
+      "builders": {
+        "docker": {
+          "mode": "ko",
+          "context": "test/fixtures/ko",
+          "importpath": "."
+        }
+      },
+      "paths": [
+        "test/fixtures/ko/**"
+      ],
+      "smoke": {
+        "commands": [
+          "/ko-app/selftest-ko"
+        ]
+      }
+    },
     "selftest-pkg": {
       "builders": {
         "apko": {

@@ -122,6 +122,11 @@ def norm_builders($n; $b):
           build_args: ($b.docker.build_args | kv_obj),
           bake_file: ($b.docker.bake_file // "docker-bake.hcl"),
           set: ($b.docker.set | lines_arr),
+          importpath: ($b.docker.importpath // "./cmd"),
+          ko_config: ($b.docker.ko_config // ""),
+          go_version_file: ($b.docker.go_version_file // ""),
+          ldflags: ($b.docker.ldflags // []),
+          env: ($b.docker.env // []),
           tag_prefix: ($b.docker.tag_prefix // null),
           archs: ($b.docker.archs // null)
         }} else {} end)
@@ -183,10 +188,14 @@ def validate_image($n; $pkgs):
   | if ($bad_smoke | length) > 0
       then error("image \($n): builders.\($bad_smoke[0]).smoke.verify_version must be boolean") else . end
   | if .builders.docker != null then
-      (if is_one_of(.builders.docker.mode; ["build", "bake"]) | not
-         then error("image \($n): docker.mode must be build or bake") else . end)
+      (if is_one_of(.builders.docker.mode; ["build", "bake", "ko"]) | not
+         then error("image \($n): docker.mode must be build, bake, or ko") else . end)
       | (if .builders.docker.mode == "bake" and .builders.docker.bake_file == ""
            then error("image \($n): docker.bake_file is required for bake mode") else . end)
+      | (if .builders.docker.mode == "ko" and .builders.docker.importpath == ""
+           then error("image \($n): docker.importpath is required for ko mode") else . end)
+      | (if any(.builders.docker.env[]; test("^[A-Za-z_][A-Za-z0-9_]*=") | not)
+           then error("image \($n): docker.env entries must be KEY=VALUE") else . end)
     else . end
   | if .builders.apko != null then
       (.builders.apko.configs as $cfgs
@@ -257,21 +266,32 @@ def legacy_to_v2($d; $a):
           ($di[$n] // null) as $d1
           | ($ai[$n] // null) as $a1
           | (($d1.type // $a1.type) // null) as $t
-          | if ($d1 != null) and ((($d1.mode // "build") | IN("build", "bake")) | not)
+          | if ($d1 != null) and ((($d1.mode // "build") | IN("build", "bake", "ko")) | not)
               then error("image \($n): mode \($d1.mode) is not supported by build-images.yaml") else . end
-          | if $d1 != null and ($d1 | has("env"))
-              then error("image \($n): env is not supported by build-images.yaml") else . end
+          | if $d1 != null and ($d1 | has("env")) and (($d1.mode // "build") != "ko")
+              then error("image \($n): env is only supported for mode ko by build-images.yaml") else . end
           | .[$n] = {
               builders: ({}
-                + (if $d1 == null then {} else {docker: {
+                + (if $d1 == null then {} else {docker: ({
                     mode: ($d1.mode // "build"),
                     context: ($d1.context // "."),
                     dockerfile: ($d1.dockerfile // "Dockerfile"),
                     target: ($d1.target // ""),
                     build_args: ($d1.build_args | kv_obj),
                     bake_file: ($d1.bake_file // "docker-bake.hcl"),
-                    set: ($d1.set | lines_arr)
-                  }} end)
+                    set: ($d1.set | lines_arr),
+                    importpath: "./cmd",
+                    ko_config: "",
+                    go_version_file: "",
+                    ldflags: [],
+                    env: []
+                  } + (if ($d1.mode // "build") == "ko" then {
+                    context: ($d1.ko_working_directory // "."),
+                    importpath: ($d1.ko_importpath // "./cmd"),
+                    ko_config: ".ko.yaml",
+                    go_version_file: ($d1.ko_go_version_file // ""),
+                    env: ($d1.env | lines_arr)
+                  } else {} end))} end)
                 + (if $a1 == null then {} else {apko: {
                     needs_packages: ($a1.needs_melange // []),
                     tag_prefix: (if ($d.images // {} | length) > 0 then "apko-" else "" end),
@@ -308,6 +328,13 @@ def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $
 def local_ref($id): "local/" + ($id | ascii_downcase) + ":smoke";
 def merge_args($hook; $args): ($hook + $args) | to_entries | map("\(.key)=\(.value)") | join("\n");
 def pkg_env($hook; $env): [$hook, $env] | map(select(. != "")) | join("\n");
+def ko_fields($hook; $d): if $d.mode == "ko" then {
+    importpath: $d.importpath,
+    ko_config: $d.ko_config,
+    go_version_file: $d.go_version_file,
+    ldflags: ($d.ldflags | join("\n")),
+    env: pkg_env(merge_args($hook; {}); ($d.env | join("\n")))
+  } else {} end;
 JQ
 
 # Normalize the catalog into the version 2 model at $MODEL.
@@ -380,6 +407,30 @@ any_changed_matches() {
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
     if matches_pattern "$file" "$pattern"; then
+      return 0
+    fi
+  done <<< "$CHANGED_FILES"
+  return 1
+}
+
+# True when a changed file matches at least one positive pattern and no
+# negative pattern. Negative patterns are written with a leading !.
+patterns_select_changed() {
+  local file pattern matched_positive matched_negative
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    matched_positive=false
+    matched_negative=false
+    for pattern in "$@"; do
+      if [[ "$pattern" == !* ]]; then
+        if matches_pattern "$file" "${pattern#!}"; then
+          matched_negative=true
+        fi
+      elif matches_pattern "$file" "$pattern"; then
+        matched_positive=true
+      fi
+    done
+    if [[ "$matched_positive" == true && "$matched_negative" == false ]]; then
       return 0
     fi
   done <<< "$CHANGED_FILES"
@@ -508,25 +559,21 @@ plan_changed() {
     load_all
     return 0
   fi
-  while IFS= read -r pattern; do
-    [[ -z "$pattern" ]] && continue
-    if any_changed_matches "$pattern"; then
-      echo "Shared path matched $pattern: planning the full catalog"
-      load_all
-      return 0
-    fi
-  done < <(jq -r '.shared_paths[]?' "$MODEL")
+  local shared_patterns=() image_patterns=()
+  mapfile -t shared_patterns < <(jq -r '.shared_paths[]?' "$MODEL")
+  if [[ ${#shared_patterns[@]} -gt 0 ]] && patterns_select_changed "${shared_patterns[@]}"; then
+    echo "Shared path matched: planning the full catalog"
+    load_all
+    return 0
+  fi
 
   SELECT_IMAGES=()
   for n in "${ALL_IMAGES[@]+"${ALL_IMAGES[@]}"}"; do
-    while IFS= read -r pattern; do
-      [[ -z "$pattern" ]] && continue
-      if any_changed_matches "$pattern"; then
-        echo "Image path match: $pattern -> $n"
-        SELECT_IMAGES+=("$n")
-        break
-      fi
-    done < <(jq -r --arg n "$n" '.images[$n].paths[]?' "$MODEL")
+    mapfile -t image_patterns < <(jq -r --arg n "$n" '.images[$n].paths[]?' "$MODEL")
+    if [[ ${#image_patterns[@]} -gt 0 ]] && patterns_select_changed "${image_patterns[@]}"; then
+      echo "Image path match: $n"
+      SELECT_IMAGES+=("$n")
+    fi
   done
 
   local changed_pkgs=()
@@ -682,7 +729,7 @@ main() {
                     has_smoke: has_smoke($i.builders.docker.smoke),
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
                     smoke_script: $i.builders.docker.smoke.script
-                  }] else [] end)
+                  } + ko_fields($hook; $i.builders.docker)] else [] end)
               + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
                   | {
@@ -713,7 +760,7 @@ main() {
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | ( (if $i.builders.docker then [ $i.builders.docker.archs[] as $a | {
+            | ( (if $i.builders.docker and $i.builders.docker.mode != "ko" then [ $i.builders.docker.archs[] as $a | {
                     id: "\($n)-docker-\($a)",
                     image: $n,
                     builder: "docker",
@@ -759,13 +806,35 @@ main() {
                       registry: $m.registry
                     }
                 ] else [] end)
+              + (if $i.builders.docker and $i.builders.docker.mode == "ko" then [{
+                  id: "\($n)-ko",
+                  image: $n,
+                  builder: "docker",
+                  kind: "ko",
+                  arch: "",
+                  archs: ($i.builders.docker.archs | join(",")),
+                  runner: "ubuntu-24.04",
+                  mode: "ko",
+                  context: $i.builders.docker.context,
+                  dockerfile: "",
+                  target: "",
+                  bake_file: "",
+                  build_args: "",
+                  set: "",
+                  config: "",
+                  needs_packages: "",
+                  suffix: "",
+                  sha_tag: (prefix_for($m; $i; "docker") + $sha),
+                  ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
+                  registry: $m.registry
+                } + ko_fields($hook; $i.builders.docker)] else [] end)
             ) | .[]
           end
         ]) as $publish
       | ([ if $trusted | not then empty else
             $images[] as $n
             | $m.images[$n] as $i
-            | select($i.builders.docker != null and ($i.builders.docker.archs | length) > 0)
+            | select($i.builders.docker != null and $i.builders.docker.mode != "ko" and ($i.builders.docker.archs | length) > 0)
             | {
                 id: "\($n)-docker",
                 image: $n,
@@ -782,13 +851,13 @@ main() {
             | $m.images[$n] as $i
             | ([$i.archs[], ($i.builders.docker.archs // [])[], ($i.builders.apko.archs // [])[]] | uniq_keep)[] as $a
             | ( (if $i.builders.docker and has_smoke($i.builders.docker.smoke) and has_member($i.builders.docker.archs; $a) then [{
-                    id: "\($n)-docker-\($a)",
+                    id: "\($n)-\(if $i.builders.docker.mode == "ko" then "ko" else "docker" end)-\($a)",
                     image: $n,
                     builder: "docker",
                     arch: $a,
                     runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                     registry: $m.registry,
-                    final_artifact: "final-\($n)-docker",
+                    final_artifact: "final-\($n)-\(if $i.builders.docker.mode == "ko" then "ko" else "docker" end)",
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
                     smoke_script: $i.builders.docker.smoke.script,
                     expected_version: (if $i.builders.docker.smoke.verify_version and $version != "" then $version else "" end)
