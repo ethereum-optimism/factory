@@ -143,15 +143,14 @@ names the tag.
 ## Packages
 
 Each entry under `packages` describes one melange build. A package is built
-once per architecture in `archs`. Untrusted runs build `x86_64` only, on the
-standard hosted runner regardless of `runner_profile`. Before a `large` package
-builds there, the runner removes preinstalled toolchains the build does not use
-and prunes its Docker images, to leave room on the root filesystem.
+once per architecture in `archs`. Untrusted runs build `x86_64` only. Every
+event builds a package on the runner that `runner_profile` selects for its
+architecture.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `config` | `melange/<name>.yaml` | Melange configuration path. |
-| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on trusted runs. Builders take the same key, see Images and builders. |
+| `runner_profile` | `standard` | `standard` or `large`. Selects the runner per architecture on every event. Builders take the same key, see Images and builders. |
 | `source` | none | Repository checked out before the build, with `repository`, `ref`, `path`, `root`. Omit `repository` to check out the calling repository. |
 | `source.root` | `true` when `path` is `"."`, else `false` | Builds as if the checkout were the workspace root. The melange configuration, the pipelines directory, `cache_key_files` and the source directory resolve inside the checkout instead of the calling repository. Not valid for the calling repository checkout. |
 | `source_submodules` | `"false"` | `"false"`, `"true"`, or `"recursive"`. Submodules of the `source` checkout. |
@@ -181,9 +180,9 @@ secrets and no OIDC token.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
 - `runner_profile`: `standard` (default) or `large`, as for packages. Selects
-  the runner of this builder's publish legs on trusted runs, per architecture.
-  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
-  profile. Untrusted runs ignore it and use the standard runner.
+  the runner of this builder's build legs on untrusted runs and of its publish
+  legs on trusted runs, per architecture. An apko or ko builder uses one leg,
+  which runs on the amd64 runner of the profile.
 - `events`: contexts in which the builder is planned. See Builder events.
 
 ko mode fields (`dockerfile`, `target`, `build_args`, `bake_file`, and `set` do
@@ -216,9 +215,9 @@ the same way a Dockerfile pulls `FROM`.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
 - `runner_profile`: `standard` (default) or `large`, as for packages. Selects
-  the runner of this builder's publish legs on trusted runs, per architecture.
-  An apko or ko builder publishes in one leg, which uses the amd64 runner of the
-  profile. Untrusted runs ignore it and use the standard runner.
+  the runner of this builder's build legs on untrusted runs and of its publish
+  legs on trusted runs, per architecture. An apko or ko builder uses one leg,
+  which runs on the amd64 runner of the profile.
 - `events`: contexts in which the builder is planned. See Builder events.
 
 When an image has both builders, `primary` is required. Other image fields:
@@ -345,7 +344,8 @@ Untrusted runs:
 - plan only affected images and packages (the diff against the base, or the
   full catalog when a shared path or the catalog itself changed);
 - build `amd64` images locally and smoke test them;
-- build `x86_64` packages on the standard hosted runner;
+- build `x86_64` packages and the amd64 image builds on the runner their
+  `runner_profile` selects;
 - run with `contents: read` only, and never reference secrets or an OIDC token.
 
 Trusted runs:

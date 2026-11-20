@@ -562,13 +562,11 @@ fi
 # --- Untrusted runners and notices ----------------------------------------------------
 
 run_plan untrusted_large "$large" TRUSTED=false
-assert_json "$(matrix packages_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
-assert_json "$(matrix packages_matrix)" '[.[].free_disk] | unique | join(",")' 'true'
-
-# free_disk is only present for large packages on untrusted runs.
-assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'true'
+assert_json "$(matrix packages_matrix)" '[.[].runner] | unique | join(",")' 'oplabs-ubuntu-x86'
+assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'false'
 run_plan untrusted_standard "$v2" GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
   GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix packages_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
 assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'false'
 run_plan trusted_large "$large" TRUSTED=true
 assert_json "$(matrix packages_matrix)" '[.[] | has("free_disk")] | unique | join(",")' 'false'
@@ -1264,21 +1262,21 @@ run_plan ctx_pr "$ctx" TRUSTED=false "${PR_BRANCH[@]}"
 assert_eq "$(out_value "$OUT" selected_images)" "light,pronly,split" "pull request plans pull_request builders"
 assert_json "$(matrix build_matrix)" '[.[] | select(.image == "heavy")] | length' '0'
 assert_json "$(matrix build_matrix)" '[.[] | select(.image == "split") | .builder] | unique | join(",")' 'apko'
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "split") | .runner] | unique | join(",")' 'oplabs-ubuntu-x86'
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "light") | .runner] | unique | join(",")' 'ubuntu-24.04'
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "pronly") | .runner] | unique | join(",")' 'ubuntu-24.04'
 
 # Merge queue builds use the pull_request context.
 run_plan ctx_merge_group "$ctx" TRUSTED=false GITHUB_EVENT_NAME=merge_group GITHUB_REF=refs/heads/gh-readonly-queue/main/pr-7 \
   GITHUB_REF_NAME=gh-readonly-queue/main/pr-7 GITHUB_REF_TYPE=branch
 assert_eq "$(out_value "$OUT" selected_images)" "light,pronly,split" "merge group uses the pull_request context"
 
-# Untrusted plan for a large builder: the build legs use the standard runner and no custom label is emitted.
+# Untrusted plan for a large builder: the build leg runs on the large runner of its profile.
 run_plan ctx_untrusted_release "$ctx" TRUSTED=false "${RELEASE_HEAVY[@]}"
 assert_eq "$(out_value "$OUT" selected_images)" "heavy" "untrusted release tag plans the tagged image"
-assert_json "$(matrix build_matrix)" '[.[].runner] | unique | join(",")' 'ubuntu-24.04'
+assert_json "$(matrix build_matrix)" '[.[].runner] | unique | join(",")' 'oplabs-ubuntu-x86'
 assert_json "$(matrix publish_matrix)" 'length' '0'
 assert_json "$(matrix smoke_matrix)" 'length' '0'
-if grep -q 'oplabs' "$OUT"; then
-  fail "untrusted plan emitted a custom runner label"
-fi
 
 # Primary builder filtered out for the context: the remaining builder keeps the tag prefix it has when both run.
 primary_apko="$TEST_DIR/primary-apko.json"
