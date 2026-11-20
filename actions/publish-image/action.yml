@@ -158,7 +158,9 @@ runs:
           done
         fi
 
-        mounts=(-v "${config_dir}:${config_dir}:ro" -v "${out_dir}:${out_dir}")
+        source "${GITHUB_ACTION_PATH}/apko-mounts.sh"
+        apko_container_layout "$config_dir" "$out_dir"
+        mounts=("${apko_mounts[@]}")
         if [ -n "$APKO_REPOSITORIES" ]; then
           IFS=',' read -ra repos <<< "$APKO_REPOSITORIES"
           for repo in "${repos[@]}"; do
@@ -193,7 +195,7 @@ runs:
 
         docker run --rm --network host \
           --entrypoint /bin/bash \
-          --workdir "$out_dir" \
+          --workdir "$apko_workdir" \
           "${mounts[@]}" \
           -e APKO_GENERIC_USER \
           -e APKO_GENERIC_PASS \

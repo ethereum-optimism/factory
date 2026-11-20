@@ -33,3 +33,38 @@ jobs:
     uses: ./.github/workflows/build-images.yaml
     with:
       config: test/fixtures/images.json
+
+  apko-revision:
+    name: apko index carries the built commit as revision
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Build the apko fixture with the publish mounts
+        run: |
+          set -euo pipefail
+          source actions/publish-image/apko-mounts.sh
+          sandbox="$(tr -d '[:space:]' < actions/apko-sdk/image)"
+          config_dir="$(cd test/fixtures/apko && pwd)"
+          out_dir="$(mktemp -d "$RUNNER_TEMP/apko-revision.XXXXXX")"
+          mkdir "$out_dir/layout"
+          apko_container_layout "$config_dir" "$out_dir"
+          docker run --rm --network host --entrypoint /usr/bin/apko \
+            --workdir "$apko_workdir" \
+            "${apko_mounts[@]}" \
+            "$sandbox" \
+            build --ignore-signatures --arch amd64 \
+            "${config_dir}/tiny.yaml" "example.invalid/apko-revision-check:selftest" "$out_dir/layout"
+
+          revision="$(jq -r '.annotations["org.opencontainers.image.revision"] // empty' "$out_dir/layout/index.json")"
+          expected="$(git rev-parse HEAD)"
+          if [ "$revision" != "$expected" ]; then
+            echo "::error::index revision is '${revision}', expected ${expected}" >&2
+            exit 1
+          fi
+          echo "index revision: $revision"
