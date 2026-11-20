@@ -144,10 +144,8 @@ revision with your values. The publishing identity must have write access to
 the target repository. Gate the job on your release event or promotion policy;
 the action itself does not impose an event filter.
 
-`docker.yaml` (all build modes) and `apko-publish.yaml` expose `image` and
-`digest` workflow outputs. `apko.yaml` exposes `services_json` and a `digests`
-JSON object keyed by service name; construct each reference as
-`registry/service@digest`. A matrix invoking a reusable workflow does not
+`docker.yaml` (all build modes) exposes `image` and `digest` workflow outputs;
+construct each reference as `registry/service@digest`. A matrix invoking a reusable workflow does not
 aggregate its outputs: publish per image with its exact digest, rather than
 using a single `needs.build.outputs.image` for an entire matrix.
 

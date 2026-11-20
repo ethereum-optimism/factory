@@ -5,8 +5,6 @@ and validate them with service-owned integration tests.
 
 ## What's here
 
-- `actions/apko-plan` and `.github/workflows/melange-build.yaml` plan and build
-  Melange packages. See [runner profiles and caller migration](actions/apko-plan/README.md).
 - `actions/plan` — reads a consumer repo's `.github/images.json`, decides which
   images to build, and emits a matrix consumable by the build and
   integration-test workflows.
@@ -25,8 +23,8 @@ and validate them with service-owned integration tests.
 - `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
   `renovate-config.json` — shared CVE-only Renovate baseline preset. See
   [Renovate](#renovate).
-- `actions/detect-changes`, `actions/parse-tag` — legacy composite actions
-  retained for compatibility; new consumers should use `actions/plan`.
+- `actions/parse-tag`: legacy composite action retained for compatibility;
+  new consumers should use `actions/plan`.
 - `actions/agent-approval-check`: dependency-free approval gate for pull
   requests opened by agent accounts. Requires distinct write-capable human
   approvals and publishes the `agent-approval-check` commit status.
