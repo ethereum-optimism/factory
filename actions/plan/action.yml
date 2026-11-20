@@ -30,8 +30,8 @@ outputs:
     value: ${{ steps.plan.outputs.matrix_json }}
   groups_matrix_json:
     description: >
-      JSON array of group build entries for factory/.github/workflows/apko.yaml
-      (melange+apko group builds). Each entry has melange_config, services,
+      JSON array of group build entries (melange+apko
+      group builds). Each entry has melange_config, services,
       apko_config_dir, and other group-level fields.
     value: ${{ steps.plan.outputs.groups_matrix_json }}
   has_builds:

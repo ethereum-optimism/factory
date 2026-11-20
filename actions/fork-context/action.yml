@@ -3,7 +3,7 @@ description: >
   Compute fork-PR context: whether this run is from a fork PR, which
   registry to push to (canonical or ttl.sh fallback), and whether to
   authenticate to GCP and attest provenance. Single source of truth so
-  docker.yaml, apko.yaml, and any future build mode share the same fork
+  docker.yaml, build-images.yaml, and any future build mode share the same fork
   policy.
 inputs:
   canonical_registry:
