@@ -70,8 +70,9 @@ The run is either trusted or untrusted, decided once by
   digest.
 - Untrusted: pull requests, merge groups, forks, and dispatches from other
   branches. These runs plan only the affected images, build `amd64` images and
-  `x86_64` packages on standard hosted runners, and smoke test them. They have
-  `contents: read` only and no access to secrets or an OIDC token.
+  `x86_64` packages on the runner their `runner_profile` selects, and smoke test
+  them. They have `contents: read` only and no access to secrets or an OIDC
+  token.
 
 The planner is `actions/plan-images`. The step actions are
 `actions/build-packages`, `actions/stage-packages`, `actions/build-image`,

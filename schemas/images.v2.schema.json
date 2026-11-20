@@ -377,7 +377,7 @@
             "standard",
             "large"
           ],
-          "description": "Runner profile for this builder's publish leg on trusted runs, per architecture (apko and ko publish in one leg on the amd64 runner). Defaults to standard. Untrusted runs always use the standard runner."
+          "description": "Runner profile for this builder's build legs on untrusted runs and publish legs on trusted runs, per architecture (apko and ko use one leg on the amd64 runner). Defaults to standard."
         },
         "events": {
           "type": "array",
@@ -475,7 +475,7 @@
             "standard",
             "large"
           ],
-          "description": "Runner profile for this builder's publish leg on trusted runs, per architecture (apko and ko publish in one leg on the amd64 runner). Defaults to standard. Untrusted runs always use the standard runner."
+          "description": "Runner profile for this builder's build legs on untrusted runs and publish legs on trusted runs, per architecture (apko and ko use one leg on the amd64 runner). Defaults to standard."
         },
         "events": {
           "type": "array",

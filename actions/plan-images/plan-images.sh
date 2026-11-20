@@ -822,7 +822,7 @@ main() {
               id: "\($p)-\($arch)",
               package: $p,
               arch: $arch,
-              runner: (if $trusted then runner_for($c.runner_profile; $arch) else "ubuntu-24.04" end),
+              runner: runner_for($c.runner_profile; $arch),
               config: $c.config,
               checkout_source: ($c.source != null),
               source_repository: ($c.source.repository // ""),
@@ -835,8 +835,7 @@ main() {
               build_env: pkg_env(merge_args($hook; {}); $c.build_env),
               build_version: (if $version != "" then $version else $c.build_version end)
             } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end)
-              + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end)
-              + (if (($trusted | not) and ($c.runner_profile == "large")) then {free_disk: "true"} else {} end))
+              + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end))
         ]) as $packages
       | ([ if $trusted then empty else
             $images[] as $n
@@ -846,7 +845,7 @@ main() {
                     image: $n,
                     builder: "docker",
                     arch: "amd64",
-                    runner: "ubuntu-24.04",
+                    runner: builder_runner($i.builders.docker; "amd64"),
                     local_ref: local_ref("\($n)-docker"),
                     mode: $i.builders.docker.mode,
                     context: $i.builders.docker.context,
@@ -869,7 +868,7 @@ main() {
                       image: $n,
                       builder: "apko",
                       arch: "amd64",
-                      runner: "ubuntu-24.04",
+                      runner: builder_runner($i.builders.apko; "amd64"),
                       local_ref: local_ref("\($n)-apko\($sfx)"),
                       mode: "",
                       context: "",
