@@ -740,7 +740,7 @@ main() {
 
   if [[ "$REF_TYPE" == "tag" ]]; then
     plan_release
-  elif [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "push" || "$EVENT_NAME" == "merge_group" ]]; then
+  elif [[ "$TRUSTED" != "true" && ( "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "push" || "$EVENT_NAME" == "merge_group" ) ]]; then
     load_all
     if compute_changed_files; then
       echo "Changed files: $(printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' | wc -l | tr -d ' ') ($EVENT_NAME)"

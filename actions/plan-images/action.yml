@@ -2,9 +2,10 @@ name: 'Plan images'
 description: >
   Plan the package, build, publish, manifest, and smoke matrices for
   build-images.yaml from an images catalog. Reads a version 2 catalog, or a
-  legacy images.json merged with images.apko.json. On pull_request and push
-  only the images and packages affected by the diff are planned. Release tags
-  plan a single image. Untrusted plans are restricted to amd64 builds and
+  legacy images.json merged with images.apko.json. On pull_request, merge_group,
+  and untrusted push runs only the images and packages affected by the diff are
+  planned. Trusted runs (default branch pushes) plan the full catalog. Release
+  tags plan a single image. Untrusted plans are restricted to amd64 builds and
   x86_64 packages and emit no publish legs.
 
   Requires a checkout with fetch-depth 0 so the changed files can be computed.

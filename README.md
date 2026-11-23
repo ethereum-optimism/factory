@@ -64,8 +64,8 @@ The run is either trusted or untrusted, decided once by
 `actions/fork-context`:
 
 - Trusted: a push, schedule, or dispatch on the default branch, or a tag push.
-  These runs publish, attest, and smoke test every architecture of the pushed
-  digest.
+  These runs plan every image, publish, attest, and smoke test every
+  architecture of the pushed digest.
 - Untrusted: pull requests, merge groups, forks, and dispatches from other
   branches. These runs plan only the affected images, build `amd64` images and
   `x86_64` packages on the runner their `runner_profile` selects, and smoke test

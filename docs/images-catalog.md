@@ -350,6 +350,7 @@ Untrusted runs:
 
 Trusted runs:
 
+- plan every image and package in the catalog, whatever the diff;
 - publish with the `release` environment: docker architectures are built
   natively and pushed by digest, apko images are published for all catalog
   architectures in one `apko publish`, and ko images are published for all
