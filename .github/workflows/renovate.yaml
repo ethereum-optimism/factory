@@ -25,7 +25,7 @@ on:
     secrets:
       NOVE_RENOVATE_URL:
         required: true
-        description: "Base URL of the token exchange service."
+        description: "Host of the token exchange service, without scheme."
 
 permissions:
   contents: read
@@ -39,16 +39,11 @@ jobs:
     steps:
       - name: Mint Renovate token
         id: sts
-        env:
-          NOVE_RENOVATE_URL: ${{ secrets.NOVE_RENOVATE_URL }}
-        run: |
-          set -euo pipefail
-          oidc="$(curl --fail --silent --show-error --retry 3 -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=nove-renovate" | jq -r .value)"
-          echo "::add-mask::$oidc"
-          token="$(curl --fail --silent --show-error --retry 3 -H "Authorization: Bearer $oidc" "${NOVE_RENOVATE_URL}/sts/exchange?scope=${GITHUB_REPOSITORY}&identity=renovate" | jq -r .token)"
-          test -n "$token" && test "$token" != null
-          echo "::add-mask::$token"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          domain: ${{ secrets.NOVE_RENOVATE_URL }}
+          scope: ${{ github.repository }}
+          identity: renovate
 
       - name: Renovate
         uses: renovatebot/github-action@3064367f740a1a91cca218698a63902689cce200 # v46.1.20

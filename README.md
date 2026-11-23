@@ -288,9 +288,10 @@ config baseline, so each consumer repo carries only a thin caller and a thin
 
 The `schedule` / `workflow_dispatch` triggers live in each consumer's caller
 (a reusable workflow cannot own a `schedule`). The caller grants `id-token:
-write` to the job and passes the `NOVE_RENOVATE_URL` secret, the base URL of
-the token exchange service. The workflow requests an OIDC token with audience
-`nove-renovate` and exchanges it for a Renovate token.
+write` to the job and passes the `NOVE_RENOVATE_URL` secret, the host of the
+token exchange service without scheme (no `https://`). The workflow uses the
+octo-sts action against that host to exchange the job's OIDC token for a
+Renovate token.
 
 ```yaml
 # .github/workflows/renovate.yaml in each consumer repo
@@ -328,7 +329,7 @@ with the consumer's repository name and default branch:
 # .github/chainguard/renovate.sts.yaml in each consumer repo
 issuer: https://token.actions.githubusercontent.com
 subject: repo:ethereum-optimism/<repo>:ref:refs/heads/<default-branch>
-audience: nove-renovate
+audience: <token exchange service host>
 claim_pattern:
   repository: ethereum-optimism/<repo>
   ref: refs/heads/<default-branch>
