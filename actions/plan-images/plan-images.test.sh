@@ -513,6 +513,34 @@ pr_change unrelated docs/readme.md
 assert_eq "$(out_value "$OUT" selected_images)" "" "unrelated change selects nothing"
 assert_json "$(matrix build_matrix)" 'length' '0'
 
+# push_change <name> <file> <trusted>: a push to refs/heads/main with a diff against base_sha.
+push_change() {
+  local name="$1" file="$2" trusted="$3"
+  mkdir -p "$(dirname "$repo/$file")"
+  printf '\n' >> "$repo/$file"
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "$name"
+  local head_sha
+  head_sha=$(git -C "$repo" rev-parse HEAD)
+  printf '{"before":"%s","after":"%s"}' "$base_sha" "$head_sha" > "$TEST_DIR/event-push-$name.json"
+  pushd "$repo" >/dev/null
+  run_plan "push-$name" .github/images.json GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+    GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch GITHUB_SHA="$head_sha" \
+    GITHUB_EVENT_PATH="$TEST_DIR/event-push-$name.json" TRUSTED="$trusted"
+  popd >/dev/null
+  git -C "$repo" reset -q --hard "$base_sha"
+}
+
+push_change untrusted-widget widget/b.txt false
+assert_eq "$(out_value "$OUT" selected_images)" "widget" "untrusted push change selects widget only"
+
+push_change trusted-widget widget/b.txt true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push plans every image"
+assert_json "$(matrix build_matrix)" 'length' '0'
+
+push_change trusted-unrelated docs/readme.md true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push with unrelated change plans every image"
+
 # --- Release ref tag matches the legacy sanitized ref name ----------------------
 
 default_release="$TEST_DIR/default-release.json"
