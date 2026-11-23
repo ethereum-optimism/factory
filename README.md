@@ -276,19 +276,22 @@ Shared self-hosted Renovate delivery: a reusable workflow plus a CVE-only
 config baseline, so each consumer repo carries only a thin caller and a thin
 `renovate.json`.
 
-- `.github/workflows/renovate.yaml` — reusable workflow (`workflow_call`) that
-  mints an org Renovate GitHub App token and runs the Renovate engine against
-  the calling repo. Credentials and execution stay in our infra.
-- `renovate-config.json` — the org baseline preset. Disables all generic
+- `.github/workflows/renovate.yaml` reusable workflow (`workflow_call`) that
+  mints a short-lived Renovate token through the token exchange service and
+  runs the Renovate engine against the calling repo. Execution stays in our
+  infra.
+- `renovate-config.json`: the org baseline preset. Disables all generic
   version updates and raises PRs only for GitHub + OSV vulnerability advisories
   (CVE-only). npm major updates are blocked, including vulnerability fixes, so
   a CVE whose only fix is a new major needs a manual upgrade. Consume it from a
   repo's `renovate.json` via `extends`.
 
 The `schedule` / `workflow_dispatch` triggers live in each consumer's caller
-(a reusable workflow cannot own a `schedule`). The Renovate GitHub App
-credentials (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`) are org-level
-secrets, reached via `secrets: inherit`.
+(a reusable workflow cannot own a `schedule`). The caller grants `id-token:
+write` to the job and passes the `NOVE_RENOVATE_URL` secret, the host of the
+token exchange service without scheme (no `https://`). The workflow uses the
+octo-sts action against that host to exchange the job's OIDC token for a
+Renovate token.
 
 ```yaml
 # .github/workflows/renovate.yaml in each consumer repo
@@ -306,17 +309,44 @@ on:
         default: false
 jobs:
   renovate:
-    uses: ethereum-optimism/factory/.github/workflows/renovate.yaml@<pinned-sha>
     permissions:
       contents: read
-    secrets: inherit
+      id-token: write
+    uses: ethereum-optimism/factory/.github/workflows/renovate.yaml@<pinned-sha>
+    secrets:
+      NOVE_RENOVATE_URL: ${{ secrets.NOVE_RENOVATE_URL }}
     with:
       logLevel: ${{ inputs.logLevel || 'info' }}
       dryRun: ${{ inputs.dryRun || false }}
 ```
 
+The token exchange service checks the calling workflow's OIDC claims against a
+trust policy that each consumer repo commits at
+`.github/chainguard/renovate.sts.yaml`. Replace `<repo>` and `<default-branch>`
+with the consumer's repository name and default branch:
+
+```yaml
+# .github/chainguard/renovate.sts.yaml in each consumer repo
+issuer: https://token.actions.githubusercontent.com
+subject: repo:ethereum-optimism/<repo>:ref:refs/heads/<default-branch>
+audience: <token exchange service host>
+claim_pattern:
+  repository: ethereum-optimism/<repo>
+  ref: refs/heads/<default-branch>
+  event_name: (schedule|workflow_dispatch)
+  workflow_ref: ethereum-optimism/<repo>/\.github/workflows/renovate\.yaml@refs/heads/<default-branch>
+  job_workflow_ref: ethereum-optimism/factory/\.github/workflows/renovate\.yaml@[0-9a-f]{40}
+permissions:
+  contents: write
+  pull_requests: write
+  issues: write
+  checks: read
+  statuses: read
+  vulnerability_alerts: read
+```
+
 ```json
-// renovate.json in each consumer repo — extend the baseline, then add any
+// renovate.json in each consumer repo: extend the baseline, then add any
 // repo-specific tweaks (grouping, extra labels, etc.)
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
