@@ -208,9 +208,10 @@ the same way a Dockerfile pulls `FROM`.
 `apko`:
 
 - `needs_packages`: package names whose APK repositories the build uses.
-- `configs`: variants, each `{config, tag_suffix}`. A variant with an empty
-  `tag_suffix` is the default variant. Only the default variant is smoke
-  tested. Without `configs`, `config` (default `apko/<image>.yaml`) is used.
+- `configs`: variants, each `{config, tag_suffix, smoke, allow_packages}`. A
+  variant with an empty `tag_suffix` is the default variant. Every variant is
+  smoke tested against its own digest. Without `configs`, `config` (default
+  `apko/<image>.yaml`) is used. See Variants.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
@@ -223,7 +224,9 @@ the same way a Dockerfile pulls `FROM`.
 When an image has both builders, `primary` is required. Other image fields:
 
 - `archs`: `amd64`, `arm64`. Defaults to both. Each builder uses its own `archs` when set, otherwise these. Untrusted runs build `amd64` only.
-- `paths`: changed-file patterns for pull requests and pushes.
+- `paths`: changed-file patterns for pull requests and pushes. Each apko
+  variant's `config` file is a changed path of the image too, even when `paths`
+  does not list it.
 - `smoke`: `commands` (each string split on whitespace into entrypoint and
   arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
   `verify_version` (on release tags, a command must print the version).
@@ -247,7 +250,8 @@ Docker on amd64 only, while apko already publishes amd64 and arm64:
 Smoke per builder: a builder's `smoke` replaces the image `smoke` entirely for
 that builder, with no merging of fields. Resolution: the builder's `smoke`, else
 the image `smoke`, else no smoke. An empty object (`{}` or `{"commands": []}`)
-disables smoke for that builder only. Example: the apko image puts `mytool` on
+disables smoke for that builder only. An apko variant can override the builder
+smoke the same way, see Variants. Example: the apko image puts `mytool` on
 PATH while the Dockerfile image ships `/bin/tool`:
 
 ```json
@@ -300,6 +304,56 @@ the apko builder still publishes `apko-<sha>`:
 }
 ```
 
+## Variants
+
+Each entry in `builders.apko.configs` is a variant. A variant has its own apko
+configuration, publish leg, digest, multi-arch manifest, provenance attestation,
+and tags. Variants are built from the same packages, so a variant with a
+different `config` costs one apko assembly, not a rebuild of the packages.
+
+- `smoke`: the variant's smoke test. Resolution: the variant's `smoke`, else the
+  builder `smoke`, else the image `smoke`. It replaces the inherited smoke
+  entirely, and an empty object disables smoke for that variant. Untrusted runs
+  smoke the local amd64 build. Trusted runs smoke the pushed digest of every
+  architecture. `verify_version` applies on release tags.
+- `allow_packages`: package names exempt from the `-slim` guard below. Version
+  constraints are ignored. Give a reason for each entry in the PR description.
+- Change detection: each variant's `config` file counts as a changed path of
+  its image.
+
+The `-slim` guard: when a variant's `tag_suffix` ends in `-slim`, its apko file
+must not list `apk-tools`, `busybox`, or a package whose name starts with
+`openssl` under `contents.packages`, unless `allow_packages` names it. The
+planner fails with an error that names the file and the package. The guard
+checks every image of the catalog on every run, and a `-slim` config file that
+does not exist also fails the plan. Variants without the `-slim` suffix are not
+checked.
+
+Example, with `apko/foo.yaml` (the default variant, which keeps `busybox` and
+`apk-tools`) and `apko/foo-slim.yaml` (which lists only `ca-certificates-bundle`
+and `foo-bin`):
+
+```json
+"foo": {
+  "builders": {
+    "apko": {
+      "needs_packages": ["stack"],
+      "configs": [
+        {"config": "apko/foo.yaml"},
+        {"config": "apko/foo-slim.yaml", "tag_suffix": "-slim"}
+      ]
+    }
+  },
+  "paths": ["foo/**"],
+  "smoke": {"commands": ["foo --version"], "verify_version": true}
+}
+```
+
+Both variants inherit `foo --version`. A variant can use its own command:
+`{"config": "apko/foo-slim.yaml", "tag_suffix": "-slim", "smoke": {"commands": ["/usr/bin/foo --version"]}}`.
+A variant that needs a package from the guard list names it in
+`allow_packages`, for example `"allow_packages": ["openssl"]`.
+
 ## Tags
 
 For a builder, the tag prefix is:
@@ -316,7 +370,10 @@ Published tags for a prefix `P`:
 
 - `P<commit sha>` and `P<sanitized ref>`. On release tags the sanitized ref is
   the rendered `publish_tag` (see Release tags).
-- apko variants append their `tag_suffix` to both tags.
+- apko variants append their `tag_suffix` to both tags. With `tag_suffix`
+  `-slim`, a commit publishes `<sha>-slim`, the default branch publishes
+  `develop-slim` (or `latest-slim` for the alias), and a release publishes
+  `<publish_tag>-slim`. With `release.publish_tag` `${version}`, `v1.2.3-slim`.
 - Docker images are pushed by digest per architecture, then merged into a
   manifest list under those tags.
 

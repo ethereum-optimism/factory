@@ -166,8 +166,8 @@ def norm_builders($n; $b):
           needs_packages: ($b.apko.needs_packages // []),
           tag_prefix: ($b.apko.tag_prefix // null),
           configs: (if ($b.apko.configs // null) != null then
-                      [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // "")}]
-                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: ""}] end),
+                      [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // ""), smoke: (.smoke // null), allow_packages: ((.allow_packages // []) | map(sub("[=<>~!].*$"; "")))}]
+                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: "", smoke: null, allow_packages: []}] end),
           archs: ($b.apko.archs // null),
           runner_profile: (if ($b.apko | has("runner_profile")) then $b.apko.runner_profile else "standard" end),
           events: (if ($b.apko | has("events")) then $b.apko.events else build_events end)
@@ -186,12 +186,16 @@ def norm_image($n):
   | . as $i
   | ($i.archs // ["amd64", "arm64"]) as $iarchs
   | norm_smoke($i.smoke) as $ismoke
+  | (norm_builders($n; $i.builders)
+      | with_entries(.value.archs = (.value.archs // $iarchs)
+          | .value.smoke = (if $i.builders[.key].smoke == null then $ismoke else norm_smoke($i.builders[.key].smoke) end))
+      | if .apko then ((.apko.smoke) as $asmoke
+          | .apko.configs |= map(.smoke = (if .smoke == null then $asmoke else norm_smoke(.smoke) end)))
+        else . end) as $builders
   | {
-      builders: (norm_builders($n; $i.builders)
-        | with_entries(.value.archs = (.value.archs // $iarchs)
-            | .value.smoke = (if $i.builders[.key].smoke == null then $ismoke else norm_smoke($i.builders[.key].smoke) end))),
+      builders: $builders,
       archs: $iarchs,
-      paths: ($i.paths // []),
+      paths: (($i.paths // []) + [(($builders.apko.configs // [])[].config)]),
       smoke: $ismoke
     }
   | .primary = (
@@ -252,6 +256,8 @@ def validate_image($n; $pkgs):
             then error("image \($n): apko config tag_suffix values must be unique") else . end)
        | (if any($cfgs[]; (.tag_suffix | test("^[a-zA-Z0-9.-]*$")) | not)
             then error("image \($n): tag_suffix may only contain letters, digits, dot, dash") else . end)
+       | (if any($cfgs[]; (.smoke.verify_version | type) != "boolean")
+            then error("image \($n): apko config smoke.verify_version must be boolean") else . end)
        | (if any(.builders.apko.needs_packages[]; is_one_of(.; $pkgs) | not)
             then error("image \($n): needs_packages must name entries in packages") else . end))
     else . end
@@ -733,8 +739,41 @@ to_json_array() {
   printf '%s\n' "$@" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique'
 }
 
+# Fails when a -slim variant lists apk-tools, busybox, or an openssl package that
+# its allow_packages does not name. Version constraints are stripped before matching.
+check_slim_variants() {
+  local image cfg allow pkgs pkg name failed=false
+  while IFS=$'\t' read -r image cfg allow; do
+    [[ -n "$image" ]] || continue
+    if [[ ! -f "$cfg" ]]; then
+      echo "::error::image $image: -slim variant config not found: $cfg" >&2
+      failed=true
+      continue
+    fi
+    pkgs=$(yq -r '(.contents.packages // [])[]' "$cfg")
+    while IFS= read -r pkg; do
+      [[ -n "$pkg" ]] || continue
+      name="${pkg%%[=<>~!]*}"
+      if [[ "$name" == "apk-tools" || "$name" == "busybox" || "$name" =~ ^openssl ]]; then
+        case ",$allow," in
+          *",$name,"*) continue ;;
+        esac
+        echo "::error::image $image: -slim variant $cfg lists $pkg; -slim variants must not include apk-tools, busybox, or openssl packages unless allow_packages names them" >&2
+        failed=true
+      fi
+    done <<< "$pkgs"
+  done < <(jq -r '.images | to_entries[] | .key as $n
+      | (.value.builders.apko.configs // [])[]
+      | select(.tag_suffix | endswith("-slim"))
+      | [$n, .config, ((.allow_packages // []) | join(","))] | @tsv' "$MODEL")
+  if [[ "$failed" == true ]]; then
+    exit 1
+  fi
+}
+
 main() {
   normalize_catalog
+  check_slim_variants
   local hook_kv
   hook_kv=$(run_hook)
 
@@ -880,9 +919,9 @@ main() {
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
                       suffix: $v.tag_suffix,
-                      has_smoke: ($v.tag_suffix == "" and has_smoke($i.builders.apko.smoke)),
-                      smoke_commands: (if $v.tag_suffix == "" then ($i.builders.apko.smoke.commands | tojson) else "[]" end),
-                      smoke_script: (if $v.tag_suffix == "" then $i.builders.apko.smoke.script else "" end)
+                      has_smoke: has_smoke($v.smoke),
+                      smoke_commands: ($v.smoke.commands | tojson),
+                      smoke_script: $v.smoke.script
                     }
                 ] else [] end)
             ) | .[]
@@ -993,18 +1032,20 @@ main() {
                     smoke_script: $i.builders.docker.smoke.script,
                     expected_version: (if $i.builders.docker.smoke.verify_version and $version != "" then $version else "" end)
                   }] else [] end)
-                + (if $i.builders.apko and has_smoke($i.builders.apko.smoke) and has_member($i.builders.apko.archs; $a) then [ $i.builders.apko.configs[] | select(.tag_suffix == "")
+                + (if $i.builders.apko and has_member($i.builders.apko.archs; $a) then [ $i.builders.apko.configs[] as $v
+                    | ($v.tag_suffix | sanitize_suffix) as $sfx
+                    | select(has_smoke($v.smoke))
                     | {
-                        id: "\($n)-apko-\($a)",
+                        id: "\($n)-apko\($sfx)-\($a)",
                         image: $n,
                         builder: "apko",
                         arch: $a,
                         runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                         registry: $m.registry,
-                        final_artifact: "final-\($n)-apko",
-                        smoke_commands: ($i.builders.apko.smoke.commands | tojson),
-                        smoke_script: $i.builders.apko.smoke.script,
-                        expected_version: (if $i.builders.apko.smoke.verify_version and $version != "" then $version else "" end)
+                        final_artifact: "final-\($n)-apko\($sfx)",
+                        smoke_commands: ($v.smoke.commands | tojson),
+                        smoke_script: $v.smoke.script,
+                        expected_version: (if $v.smoke.verify_version and $version != "" then $version else "" end)
                       }
                   ] else [] end)
               ) | .[]

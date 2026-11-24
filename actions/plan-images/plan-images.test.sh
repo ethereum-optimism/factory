@@ -201,13 +201,13 @@ assert_json "$(matrix smoke_matrix)" '.[0].expected_version' 'v1.2.3'
 assert_json "$(matrix packages_matrix)" 'length' '0'
 assert_eq "$(matrix selected_images)" "widget" "release selects only the tagged image"
 
-# Release tag for an apko image: default variant verifies the version, dev variant does not.
+# Release tag for an apko image: every variant smoke tests and verifies the version.
 run_plan release_gadget "$v2" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/gadget/v3.0.0 \
   GITHUB_REF_NAME=gadget/v3.0.0 GITHUB_REF_TYPE=tag TRUSTED=true
 gadget_pub=$(matrix publish_matrix)
 assert_json "$gadget_pub" 'length' '2'
 assert_json "$(matrix smoke_matrix)" '[.[].expected_version] | unique | join(",")' 'v3.0.0'
-assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64,gadget-apko-arm64'
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64,gadget-apko-arm64,gadget-apko-dev-amd64,gadget-apko-dev-arm64'
 assert_json "$gadget_pub" '[.[] | select(.suffix == "")][0].sha_tag' "$SHA"
 assert_json "$gadget_pub" '[.[] | select(.suffix == "-dev")][0].sha_tag' "$SHA-dev"
 assert_json "$(matrix packages_matrix)" 'length' '1'
@@ -382,11 +382,11 @@ popd >/dev/null
 legacy_pub=$(matrix publish_matrix)
 assert_json "$legacy_pub" 'length' '2'
 assert_json "$legacy_pub" '[.[].image] | unique | join(",")' 'gadget'
-assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64'
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' 'gadget-apko-amd64,gadget-apko-dev-amd64'
 assert_json "$(matrix packages_matrix)" 'length' '1'
 # The legacy fixture builds amd64 only, so no arm64 smoke leg is planned.
-assert_json "$(matrix smoke_matrix)" 'length' '1'
-assert_json "$(matrix smoke_matrix)" '.[0].arch' 'amd64'
+assert_json "$(matrix smoke_matrix)" 'length' '2'
+assert_json "$(matrix smoke_matrix)" '[.[].arch] | unique | join(",")' 'amd64'
 
 # Legacy docker catalogs with a same-name apko entry become dual-builder images.
 legacy_dual_dir="$TEST_DIR/legacy-dual"
@@ -1425,5 +1425,216 @@ reject_git_change '.images.widget.builders.docker.mode = "bake" | .images.widget
   'git_build_args is not supported for mode bake'
 reject_git_change '.images.widget.builders.docker.git_build_args = "yes"' \
   'builders.docker.git_build_args must be a boolean'
+
+# --- Per-variant smoke, variant config paths, -slim guard and tags ---------------------
+
+write_slim_configs() {
+  mkdir -p "$1/apko"
+  cat > "$1/apko/foo.yaml" <<'YAML'
+contents:
+  packages:
+    - busybox
+    - apk-tools
+    - ca-certificates-bundle
+    - foo-bin
+YAML
+  cat > "$1/apko/foo-slim.yaml" <<'YAML'
+contents:
+  packages:
+    - ca-certificates-bundle
+    - foo-bin
+YAML
+  cat > "$1/apko/bar.yaml" <<'YAML'
+contents:
+  packages:
+    - busybox
+    - ca-certificates-bundle
+    - bar-bin
+YAML
+  cat > "$1/apko/bar-slim.yaml" <<'YAML'
+contents:
+  packages:
+    - ca-certificates-bundle
+    - bar-bin
+YAML
+}
+
+write_slim_catalog() {
+  cat > "$1" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "default_branch_tags": ["latest"],
+  "release": {
+    "tag_regex": "^([^/]+)/(v.+)$",
+    "service_match": 1,
+    "version_match": 2,
+    "publish_tag": "${version}",
+    "source_ref": "${ref_name}"
+  },
+  "packages": {
+    "stack": {"config": "melange/stack.yaml", "archs": ["x86_64"]}
+  },
+  "images": {
+    "foo": {
+      "builders": {
+        "apko": {
+          "needs_packages": ["stack"],
+          "configs": [
+            {"config": "apko/foo.yaml", "tag_suffix": ""},
+            {"config": "apko/foo-slim.yaml", "tag_suffix": "-slim"}
+          ]
+        }
+      },
+      "paths": ["foo/**"],
+      "smoke": {"commands": ["foo --version"], "verify_version": true}
+    },
+    "bar": {
+      "builders": {
+        "apko": {
+          "needs_packages": ["stack"],
+          "configs": [
+            {"config": "apko/bar.yaml", "tag_suffix": ""},
+            {"config": "apko/bar-slim.yaml", "tag_suffix": "-slim", "smoke": {"commands": ["bar-slim --help"]}}
+          ]
+        }
+      },
+      "paths": ["bar/**"],
+      "smoke": {"commands": ["bar --version"]}
+    }
+  }
+}
+JSON
+}
+
+slim_repo="$TEST_DIR/slim-repo"
+mkdir -p "$slim_repo/.github" "$slim_repo/foo" "$slim_repo/bar" "$slim_repo/melange"
+write_slim_catalog "$slim_repo/.github/images.json"
+write_slim_configs "$slim_repo"
+echo base > "$slim_repo/foo/a.txt"
+echo base > "$slim_repo/bar/a.txt"
+echo base > "$slim_repo/melange/stack.yaml"
+git -C "$slim_repo" init -q
+git -C "$slim_repo" config user.email test@example.invalid
+git -C "$slim_repo" config user.name test
+git -C "$slim_repo" add -A
+git -C "$slim_repo" commit -q -m base
+slim_base_sha=$(git -C "$slim_repo" rev-parse HEAD)
+
+pushd "$slim_repo" >/dev/null
+
+# Dispatch on the default branch: every variant gets a publish leg, a trusted smoke leg, and -slim tags.
+run_plan slim_dispatch .github/images.json TRUSTED=true
+assert_json "$(matrix smoke_matrix)" '[.[].id] | sort | join(",")' \
+  'bar-apko-amd64,bar-apko-arm64,bar-apko-slim-amd64,bar-apko-slim-arm64,foo-apko-amd64,foo-apko-arm64,foo-apko-slim-amd64,foo-apko-slim-arm64'
+assert_json "$(matrix smoke_matrix)" '.[] | select(.id == "foo-apko-slim-amd64") | .smoke_commands | fromjson | join(" ")' 'foo --version'
+assert_json "$(matrix smoke_matrix)" '.[] | select(.id == "bar-apko-slim-amd64") | .smoke_commands | fromjson | join(" ")' 'bar-slim --help'
+assert_json "$(matrix smoke_matrix)" '.[] | select(.id == "bar-apko-amd64") | .smoke_commands | fromjson | join(" ")' 'bar --version'
+assert_json "$(matrix smoke_matrix)" '.[] | select(.id == "foo-apko-slim-amd64") | .final_artifact' 'final-foo-apko-slim'
+assert_json "$(matrix smoke_matrix)" '.[] | select(.id == "foo-apko-amd64") | .final_artifact' 'final-foo-apko'
+assert_json "$(matrix publish_matrix)" '.[] | select(.id == "foo-apko-slim") | .sha_tag' "${SHA}-slim"
+assert_json "$(matrix publish_matrix)" '.[] | select(.id == "foo-apko-slim") | .alias_tags' 'latest-slim'
+assert_json "$(matrix publish_matrix)" '.[] | select(.id == "foo-apko") | .alias_tags' 'latest'
+
+# Untrusted pull request run: the build legs smoke every variant on amd64.
+run_plan slim_untrusted .github/images.json GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+  GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[] | select(.builder == "apko") | .id] | sort | join(",")' \
+  'bar-apko,bar-apko-slim,foo-apko,foo-apko-slim'
+assert_json "$(matrix build_matrix)" '[.[] | select(.id == "foo-apko-slim") | .has_smoke] | join(",")' 'true'
+assert_json "$(matrix build_matrix)" '.[] | select(.id == "foo-apko-slim") | .smoke_commands | fromjson | join(" ")' 'foo --version'
+assert_json "$(matrix build_matrix)" '.[] | select(.id == "bar-apko-slim") | .smoke_commands | fromjson | join(" ")' 'bar-slim --help'
+
+# Release tag: the slim publish tag is <version>-slim and smoke carries the release version.
+run_plan slim_release .github/images.json GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/foo/v1.2.3 \
+  GITHUB_REF_NAME=foo/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "foo-apko-slim") | .ref_tag] | join(",")' 'v1.2.3-slim'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "foo-apko") | .ref_tag] | join(",")' 'v1.2.3'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "foo-apko-slim") | .alias_tags // ""] | join(",")' ''
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.id == "foo-apko-slim-amd64") | .expected_version] | join(",")' 'v1.2.3'
+assert_json "$(matrix smoke_matrix)" '[.[] | .image] | unique | join(",")' 'foo'
+
+# Default branch develop: the slim branch tag is develop-slim.
+run_plan slim_develop .github/images.json GITHUB_REF=refs/heads/develop GITHUB_REF_NAME=develop TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "foo-apko-slim") | .ref_tag] | join(",")' 'develop-slim'
+assert_json "$(matrix publish_matrix)" '[.[] | select(.id == "bar-apko-slim") | .ref_tag] | join(",")' 'develop-slim'
+
+# Config files are change paths: editing a variant config that is not listed in paths selects its image.
+slim_change() {
+  local name="$1" file="$2"
+  mkdir -p "$(dirname "$slim_repo/$file")"
+  printf '\n' >> "$slim_repo/$file"
+  git -C "$slim_repo" add -A
+  git -C "$slim_repo" commit -q -m "$name"
+  local head_sha
+  head_sha=$(git -C "$slim_repo" rev-parse HEAD)
+  printf '{"pull_request":{"base":{"sha":"%s"},"head":{"sha":"%s"}}}' "$slim_base_sha" "$head_sha" > "$TEST_DIR/event-$name.json"
+  run_plan "slim-$name" .github/images.json GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge \
+    GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch GITHUB_SHA="$head_sha" \
+    GITHUB_EVENT_PATH="$TEST_DIR/event-$name.json" TRUSTED=false
+  git -C "$slim_repo" reset -q --hard "$slim_base_sha"
+}
+slim_change foo-slim-config apko/foo-slim.yaml
+assert_eq "$(out_value "$OUT" selected_images)" "foo" "foo -slim config change selects foo"
+slim_change bar-config apko/bar.yaml
+assert_eq "$(out_value "$OUT" selected_images)" "bar" "bar fat config change selects bar"
+slim_change unrelated docs/readme.md
+assert_eq "$(out_value "$OUT" selected_images)" "" "unrelated change selects nothing"
+
+popd >/dev/null
+
+# -slim guard: apk-tools, busybox, and openssl are rejected unless allow_packages names them.
+guard_dir="$TEST_DIR/guard"
+mkdir -p "$guard_dir"
+pushd "$guard_dir" >/dev/null
+
+# guard_check <name> <pass|fail> <slim packages> [allow_packages JSON array]
+guard_check() {
+  local name="$1" expect="$2" pkgs="$3" allow="${4:-[]}" p
+  mkdir -p apko
+  {
+    echo "contents:"
+    echo "  packages:"
+    for p in $pkgs; do echo "    - $p"; done
+  } > apko/gd-slim.yaml
+  cat > apko/gd.yaml <<'YAML'
+contents:
+  packages:
+    - busybox
+    - apk-tools
+    - openssl
+YAML
+  printf '%s' '{"version":2,"registry":"registry.example.invalid/images","packages":{"stack":{"config":"melange/stack.yaml","archs":["x86_64"]}},"images":{"gd":{"builders":{"apko":{"needs_packages":["stack"],"configs":[{"config":"apko/gd.yaml","tag_suffix":""},{"config":"apko/gd-slim.yaml","tag_suffix":"-slim","allow_packages":'"$allow"'}]}},"smoke":{"commands":["gd --version"]}}}}' > "$guard_dir/catalog.json"
+  local rc=0
+  env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$TEST_DIR/guard-$name.out" GITHUB_SHA="$SHA" \
+    GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch \
+    TRUSTED=true bash "$PLAN" catalog.json > "$TEST_DIR/guard-$name.log" 2>&1 || rc=$?
+  if [[ "$expect" == pass ]]; then
+    [[ "$rc" -eq 0 ]] || { cat "$TEST_DIR/guard-$name.log" >&2; fail "guard $name rejected a valid -slim variant"; }
+  else
+    [[ "$rc" -ne 0 ]] || fail "guard $name accepted a -slim variant with a forbidden package"
+    grep -q 'must not include apk-tools, busybox, or openssl' "$TEST_DIR/guard-$name.log" \
+      || fail "guard $name missing its error message"
+  fi
+}
+
+guard_check apk-tools fail "ca-certificates-bundle apk-tools"
+guard_check busybox-pinned fail "busybox=1.36.1-r0"
+guard_check openssl-constraint fail "openssl>=3.0 ca-certificates-bundle"
+guard_check openssl-dev fail "openssl-dev"
+guard_check clean pass "ca-certificates-bundle foo-bin"
+guard_check allowed pass "ca-certificates-bundle busybox=1.36.1-r0 openssl>=3.0" '["busybox=1.36.1-r0","openssl"]'
+guard_check partial-allow fail "busybox apk-tools" '["busybox"]'
+
+# A missing -slim config file fails the plan instead of skipping the guard.
+rm -f apko/gd-slim.yaml
+rc=0
+env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$TEST_DIR/guard-missing.out" GITHUB_SHA="$SHA" \
+  GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch \
+  TRUSTED=true bash "$PLAN" "$guard_dir/catalog.json" > "$TEST_DIR/guard-missing.log" 2>&1 || rc=$?
+[[ "$rc" -ne 0 ]] || fail "guard accepted a missing -slim config"
+grep -q 'slim variant config not found' "$TEST_DIR/guard-missing.log" || fail "missing guard config error"
+
+popd >/dev/null
 
 echo "plan-images tests passed"
