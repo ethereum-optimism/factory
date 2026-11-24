@@ -428,7 +428,7 @@
         "configs": {
           "type": "array",
           "minItems": 1,
-          "description": "Variants. Each produces its own publish leg. Only the variant with an empty tag_suffix is smoke tested.",
+          "description": "Variants. Each produces its own publish leg and its own smoke test against that variant's digest. A variant with a -slim tag_suffix must not list apk-tools, busybox, or openssl packages unless allow_packages names them.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -442,6 +442,35 @@
               "tag_suffix": {
                 "type": "string",
                 "pattern": "^[a-zA-Z0-9.-]*$"
+              },
+              "smoke": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Smoke test for this variant. Replaces the builder smoke for this variant only. Omitted: the builder smoke applies. An empty object disables smoke for this variant.",
+                "properties": {
+                  "commands": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Each string is split on whitespace into an entrypoint and arguments."
+                  },
+                  "script": {
+                    "type": "string",
+                    "description": "Repository script run with IMAGE and IMAGE_ARCH set."
+                  },
+                  "verify_version": {
+                    "type": "boolean",
+                    "description": "Require a command to print the release version on release tags."
+                  }
+                }
+              },
+              "allow_packages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Packages a -slim variant may list despite the apk-tools, busybox, and openssl guard. Version constraints are ignored. Each entry needs a reason in the PR description."
               }
             }
           }

@@ -54,7 +54,7 @@ outputs:
     description: 'JSON array of docker multi-arch manifest legs, one per image.'
     value: ${{ steps.plan.outputs.manifest_matrix }}
   smoke_matrix:
-    description: 'JSON array of smoke legs, one per image, builder, and architecture, pulling the pushed digest.'
+    description: 'JSON array of smoke legs, one per image, builder variant, and architecture, pulling the pushed digest.'
     value: ${{ steps.plan.outputs.smoke_matrix }}
 
 runs:
