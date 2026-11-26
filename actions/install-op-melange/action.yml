@@ -1,0 +1,64 @@
+name: 'Install op-melange'
+description: >
+  Install the pinned op-melange release from ethereum-optimism/melange and put it on
+  PATH. The release archive is verified against a pinned sha256 before it is
+  extracted. Supports linux/amd64, linux/arm64 and darwin/arm64 runners. Uses
+  no inputs, no token and no other actions.
+
+outputs:
+  path:
+    description: Absolute path of the installed op-melange binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install op-melange
+      id: install
+      shell: bash
+      env:
+        VERSION: v0.66.0-op.1
+        SHA256_LINUX_AMD64: 6835be876fedbf9377c643ff0d6e7da6121f44ab7a1318d23506322dacf4809a
+        SHA256_LINUX_ARM64: 8d9eee2ca8eb44501871750fdcddf7b58f74fb1cfb974135e0a2c23696ed2b7a
+        SHA256_DARWIN_ARM64: faad5f356b8fd311b94906b56792217259550b0ca7ef02e7aeda5132e9c875af
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            platform=linux_amd64
+            sha256="$SHA256_LINUX_AMD64"
+            ;;
+          Linux/ARM64)
+            platform=linux_arm64
+            sha256="$SHA256_LINUX_ARM64"
+            ;;
+          macOS/ARM64)
+            platform=darwin_arm64
+            sha256="$SHA256_DARWIN_ARM64"
+            ;;
+          *)
+            echo "::error::op-melange ${VERSION} is not available for ${RUNNER_OS}/${RUNNER_ARCH}; supported: Linux/X64, Linux/ARM64, macOS/ARM64" >&2
+            exit 1
+            ;;
+        esac
+        archive_dir="$(mktemp -d "${RUNNER_TEMP}/op-melange-archive.XXXXXX")"
+        archive="${archive_dir}/op-melange_${VERSION#v}_${platform}.tar.gz"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors -o "$archive" \
+          "https://github.com/ethereum-optimism/melange/releases/download/${VERSION}/op-melange_${VERSION#v}_${platform}.tar.gz"
+        if [ "${RUNNER_OS}" = macOS ]; then
+          echo "${sha256}  ${archive}" | shasum -a 256 -c -
+        else
+          echo "${sha256}  ${archive}" | sha256sum -c -
+        fi
+        bin_dir="$(mktemp -d "${RUNNER_TEMP}/op-melange-bin.XXXXXX")"
+        tar -xzf "$archive" -C "$bin_dir" op-melange
+        chmod 0755 "${bin_dir}/op-melange"
+        version_output="$("${bin_dir}/op-melange" version)"
+        printf '%s\n' "$version_output"
+        git_version="$(printf '%s\n' "$version_output" | awk '$1 == "GitVersion:" { print $2 }')"
+        if [ "$git_version" != "$VERSION" ]; then
+          echo "::error::op-melange reports GitVersion '${git_version}', expected '${VERSION}'" >&2
+          exit 1
+        fi
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        echo "path=${bin_dir}/op-melange" >> "$GITHUB_OUTPUT"
