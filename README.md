@@ -17,6 +17,10 @@ and validate them with service-owned integration tests.
 - `.github/workflows/agent-approval-check.yaml`: reusable workflow. Reports the
   `agent-approval-check` status: pull requests opened by agent accounts need two
   distinct human approvals.
+- `.github/workflows/policy-bot-policy.yaml`: reusable workflow. Checks the
+  caller's policy-bot `.policy.yml` with the policy-bot v1.42.1 policy package
+  and the approval gate invariants, and optionally that it equals the rendering
+  of a values file. See [actions/policy-bot-policy](actions/policy-bot-policy/README.md).
 - `.github/workflows/goreleaser.yaml`: reusable GoReleaser release workflow. Runs
   `goreleaser release` for a tag and attests build provenance for the checksums
   of the produced artifacts. See [GoReleaser release](#goreleaser-release).
@@ -425,3 +429,29 @@ permissions:
   returns the expected shape) and stops there.
 - Signing and provenance for integration-test runs. Handled by the build
   workflow.
+
+## policy-bot policy check
+
+`actions/policy-bot-policy` renders a policy-bot `.policy.yml` from a values
+file and checks it. Call the reusable workflow on pull requests that touch the
+policy, pinned by full commit SHA:
+
+```yaml
+name: policy-bot-policy
+
+on:
+  pull_request:
+    paths:
+      - .policy.yml
+      - .github/policy-bot-values.yml
+      - .github/workflows/policy-bot-policy.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: ethereum-optimism/factory/.github/workflows/policy-bot-policy.yaml@0000000000000000000000000000000000000000
+    with:
+      values: .github/policy-bot-values.yml
+```

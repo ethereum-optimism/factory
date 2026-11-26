@@ -1,0 +1,34 @@
+name: policy-bot-policy
+
+on:
+  workflow_call:
+    inputs:
+      policy:
+        description: Path to the policy file
+        type: string
+        default: .policy.yml
+      values:
+        description: Optional values file; when set, the policy file must equal its rendering
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Check policy
+        uses: ethereum-optimism/factory/actions/policy-bot-policy@1aedc5c94697561c4b7a04aad681c98df767ab99
+        with:
+          policy: ${{ inputs.policy }}
+          values: ${{ inputs.values }}
