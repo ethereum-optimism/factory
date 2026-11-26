@@ -1,0 +1,38 @@
+policy:
+  approval:
+    - or:
+        - 'human change'
+        - 'no accountable human author'
+
+approval_defaults:
+  options:
+    allow_author: false
+    allow_contributor: false
+    allow_non_author_contributor: false
+    invalidate_on_push: true
+    ignore_edited_comments: true
+    ignore_update_merges: false
+    request_review:
+      enabled: false
+    methods:
+      comments: []
+      comment_patterns: []
+      body_patterns: []
+      github_review_comment_patterns: []
+      github_review: true
+
+approval_rules:
+  - name: 'human change'
+    description: 'Opened by a listed human, who is accountable for the whole change. One other listed human who has no commit on the pull request approves.'
+    if:
+      has_author_in:
+        teams: ['ethereum-optimism/engineering']
+    requires:
+      count: 1
+      teams: ['ethereum-optimism/engineering']
+
+  - name: 'no accountable human author'
+    description: 'Default for everything else: opened by an agent, bot, machine user, outside contributor or unknown account, or automation outside its lane. Two listed humans approve.'
+    requires:
+      count: 2
+      teams: ['ethereum-optimism/engineering']

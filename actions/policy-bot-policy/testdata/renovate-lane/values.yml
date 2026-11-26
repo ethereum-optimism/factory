@@ -1,0 +1,14 @@
+automation:
+  - name: renovate dependency update
+    description: Opened by renovate from a renovate branch, commits created and signed by GitHub for that App, dependency manifests and lockfiles only. One listed human approves.
+    app: renovate[bot]
+    signer: web-flow
+    branch_prefix: renovate
+    files:
+      - go.mod
+      - go.sum
+      - uv.lock
+      - Pipfile
+      - Pipfile.lock
+      - requirements.txt
+      - yarn.lock
