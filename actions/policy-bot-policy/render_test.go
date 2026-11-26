@@ -48,7 +48,9 @@ func TestValuesRejected(t *testing.T) {
 			"name":        "bot lane",
 			"description": "d",
 			"app":         "bot[bot]",
-			"paths":       "['^a$']",
+			"signer":      "web-flow",
+			"branch":      "'^bot/'",
+			"paths":       "['^deps/lock\\.json$']",
 		}
 		for _, kv := range strings.Split(extra, ";") {
 			if kv == "" {
@@ -91,6 +93,18 @@ func TestValuesRejected(t *testing.T) {
 		"team as app":           lane("app='org/team'"),
 		"missing paths":         lane("paths="),
 		"empty paths":           lane("paths=[]"),
+		"missing signer":        lane("signer="),
+		"missing branch":        lane("branch="),
+		"broad branch":          lane("branch='^.*'"),
+		"branch matching main":  lane("branch='^ma'"),
+		"dot star path":         lane("paths=['.*']"),
+		"anchored dot star":     lane("paths=['^.*$']"),
+		"empty alternative":     lane("paths=['^|.*$']"),
+		"any file in any dir":   lane("paths=['(^|/).*$']"),
+		"policy file path":      lane("paths=['^\\.policy\\.yml$']"),
+		"values file path":      lane("paths=['^\\.github/policy-bot-values\\.yml$']"),
+		"workflow paths":        lane("paths=['^\\.github/workflows/[^/]+$']"),
+		"dot dot path":          lane("paths=['(^|/)y$']"),
 		"unanchored path":       lane("paths=['go.mod']"),
 		"unterminated path":     lane("paths=['^docs/']"),
 		"bad regexp":            lane("paths=['^(a$']"),
@@ -100,9 +114,11 @@ func TestValuesRejected(t *testing.T) {
 	}
 	for name, values := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseValues([]byte(values)); err == nil {
+			_, err := ParseValues([]byte(values))
+			if err == nil {
 				t.Fatalf("values accepted:\n%s", values)
 			}
+			t.Logf("rejected: %v", err)
 		})
 	}
 

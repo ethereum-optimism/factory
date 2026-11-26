@@ -21,10 +21,45 @@ const (
 //go:embed policy.yml.tmpl
 var policyTemplate string
 
+const ValuesPath = ".github/policy-bot-values.yml"
+
 var (
 	appLogin  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*\[bot\]$`)
 	userLogin = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$`)
+
+	canaryPaths = []string{
+		"",
+		"a",
+		"src/main.go",
+		".github/workflows/x.yml",
+		"Dockerfile",
+		".policy.yml",
+		ValuesPath,
+		"x/../y",
+	}
+	canaryBranches = []string{"", "main", "feature/x"}
 )
+
+func pathProblem(pattern string, re *regexp.Regexp) string {
+	for _, c := range canaryPaths {
+		if re.MatchString(c) {
+			return fmt.Sprintf("path %q matches %q, which a lane must never cover", pattern, c)
+		}
+	}
+	return ""
+}
+
+func branchProblem(pattern string, re *regexp.Regexp) string {
+	if !strings.HasPrefix(pattern, "^") {
+		return fmt.Sprintf("branch pattern %q must be anchored with ^", pattern)
+	}
+	for _, c := range canaryBranches {
+		if re.MatchString(c) {
+			return fmt.Sprintf("branch pattern %q matches %q, which a lane must never cover", pattern, c)
+		}
+	}
+	return ""
+}
 
 type Values struct {
 	Automation []Lane `yaml:"automation"`
@@ -78,26 +113,32 @@ func (v *Values) validate() error {
 		if !appLogin.MatchString(l.App) {
 			return errors.Errorf("%s: app %q must be a GitHub App login ending in [bot]", where, l.App)
 		}
-		if l.Signer != "" && !userLogin.MatchString(l.Signer) {
-			return errors.Errorf("%s: signer %q is not a GitHub login", where, l.Signer)
+		if !userLogin.MatchString(l.Signer) {
+			return errors.Errorf("%s: signer %q is required and must be a GitHub login", where, l.Signer)
 		}
-		if l.Branch != "" {
-			if !strings.HasPrefix(l.Branch, "^") {
-				return errors.Errorf("%s: branch pattern %q must be anchored with ^", where, l.Branch)
-			}
-			if _, err := regexp.Compile(l.Branch); err != nil {
-				return errors.Wrapf(err, "%s: invalid branch pattern", where)
-			}
+		if l.Branch == "" {
+			return errors.Errorf("%s: branch is required", where)
+		}
+		branch, err := regexp.Compile(l.Branch)
+		if err != nil {
+			return errors.Wrapf(err, "%s: invalid branch pattern", where)
+		}
+		if problem := branchProblem(l.Branch, branch); problem != "" {
+			return errors.Errorf("%s: %s", where, problem)
 		}
 		if len(l.Paths) == 0 {
 			return errors.Errorf("%s: at least one path is required", where)
 		}
 		for _, p := range l.Paths {
+			re, err := regexp.Compile(p)
+			if err != nil {
+				return errors.Wrapf(err, "%s: invalid path %q", where, p)
+			}
+			if problem := pathProblem(p, re); problem != "" {
+				return errors.Errorf("%s: %s", where, problem)
+			}
 			if !strings.Contains(p, "^") || !strings.HasSuffix(p, "$") {
 				return errors.Errorf("%s: path %q must be anchored with ^ and $", where, p)
-			}
-			if _, err := regexp.Compile(p); err != nil {
-				return errors.Wrapf(err, "%s: invalid path %q", where, p)
 			}
 		}
 		for _, p := range l.ExcludePaths {

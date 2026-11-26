@@ -5,3 +5,4 @@
 /.github/actions/   @ethereum-optimism/cloud-security
 /.github/scripts/   @ethereum-optimism/cloud-security
 /.github/CODEOWNERS @ethereum-optimism/cloud-security
+/actions/policy-bot-policy/ @ethereum-optimism/cloud-security
