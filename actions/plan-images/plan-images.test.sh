@@ -513,6 +513,18 @@ pr_change unrelated docs/readme.md
 assert_eq "$(out_value "$OUT" selected_images)" "" "unrelated change selects nothing"
 assert_json "$(matrix build_matrix)" 'length' '0'
 
+many_files=()
+for i in $(seq 1 3000); do
+  many_files+=("widget/many/$(printf 'changed-file-with-a-long-name-%0200d' "$i").txt")
+done
+mkdir -p "$repo/widget/many"
+for file in "${many_files[@]}"; do
+  echo "$file" > "$repo/$file"
+done
+pr_change many-files widget/b.txt
+assert_eq "$(out_value "$OUT" selected_images)" "widget" "a PR with thousands of changed files still plans"
+assert_eq "$(grep -c '^widget/' "$TEST_DIR/pr-many-files.log")" "50" "the changed file listing stops at 50 lines"
+
 # push_change <name> <file> <trusted>: a push to refs/heads/main with a diff against base_sha.
 push_change() {
   local name="$1" file="$2" trusted="$3"

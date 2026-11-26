@@ -783,7 +783,7 @@ main() {
     load_all
     if compute_changed_files; then
       echo "Changed files: $(printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' | wc -l | tr -d ' ') ($EVENT_NAME)"
-      printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' | head -50
+      printf '%s\n' "$CHANGED_FILES" | awk 'NF && ++n <= 50'
       if [[ -z "$(printf '%s' "$CHANGED_FILES" | sed '/^$/d')" ]]; then
         echo "No changed files: no builds"
         SELECT_IMAGES=()
