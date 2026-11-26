@@ -1,0 +1,142 @@
+name: install-op-tools tests
+
+on:
+  pull_request:
+    paths:
+      - actions/install-op-*/**
+      - scripts/bump-op-tool.sh
+      - .github/workflows/install-op-tools-test.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - actions/install-op-*/**
+      - scripts/bump-op-tool.sh
+      - .github/workflows/install-op-tools-test.yaml
+
+permissions: {}
+
+jobs:
+  install:
+    name: install (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-15
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e
+        with:
+          persist-credentials: false
+
+      - name: Install op-apko
+        id: apko
+        uses: ./actions/install-op-apko
+
+      - name: Install op-melange
+        id: melange
+        uses: ./actions/install-op-melange
+
+      - name: Run installed tools from PATH
+        env:
+          APKO_PATH: ${{ steps.apko.outputs.path }}
+          MELANGE_PATH: ${{ steps.melange.outputs.path }}
+        run: |
+          set -euo pipefail
+          test "$(command -v op-apko)" = "$APKO_PATH"
+          test "$(command -v op-melange)" = "$MELANGE_PATH"
+          op-apko version
+          op-melange version
+
+  tamper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e
+        with:
+          persist-credentials: false
+
+      - name: Create action copy with an altered sha256
+        run: |
+          set -euo pipefail
+          mkdir -p .tamper
+          cp -R actions/install-op-apko .tamper/install-op-apko
+          sed -i -E 's/^( +SHA256_LINUX_AMD64: ).*/\10000000000000000000000000000000000000000000000000000000000000000/' .tamper/install-op-apko/action.yml
+          if cmp -s actions/install-op-apko/action.yml .tamper/install-op-apko/action.yml; then
+            echo "::error::sha256 was not altered" >&2
+            exit 1
+          fi
+
+      - name: Install with the altered sha256
+        id: tampered
+        continue-on-error: true
+        uses: ./.tamper/install-op-apko
+
+      - name: Require the install to fail
+        env:
+          OUTCOME: ${{ steps.tampered.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error::install with an altered sha256 finished with outcome '${OUTCOME}', expected failure" >&2
+            exit 1
+          fi
+          if command -v op-apko >/dev/null 2>&1; then
+            echo "::error::op-apko is on PATH after a failed install" >&2
+            exit 1
+          fi
+
+  verify-pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned releases and digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for tool in apko melange; do
+            action="actions/install-op-${tool}/action.yml"
+            expected="$(yq '.runs.steps[0].env | to_entries | .[] | "        " + .key + ": " + .value' "$action")"
+            version="$(yq '.runs.steps[0].env.VERSION' "$action")"
+            actual="$(scripts/bump-op-tool.sh "$tool" "$version")"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error file=${action}::pinned values do not match the attested release ${version}" >&2
+              diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+              exit 1
+            fi
+            echo "op-${tool} ${version}: pins match the attested release"
+          done

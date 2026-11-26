@@ -1,0 +1,64 @@
+name: 'Install op-apko'
+description: >
+  Install the pinned op-apko release from ethereum-optimism/apko and put it on
+  PATH. The release archive is verified against a pinned sha256 before it is
+  extracted. Supports linux/amd64, linux/arm64 and darwin/arm64 runners. Uses
+  no inputs, no token and no other actions.
+
+outputs:
+  path:
+    description: Absolute path of the installed op-apko binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install op-apko
+      id: install
+      shell: bash
+      env:
+        VERSION: v1.5.3-op.1
+        SHA256_LINUX_AMD64: 5dfbda26b313f5d5a4ab777b5f9fe83e69353dc5087a614fa300a01b94d45b8a
+        SHA256_LINUX_ARM64: f1b32384555f687b080dac2c281bd67cc59846e37c5e34e37351b915cc22b03a
+        SHA256_DARWIN_ARM64: 7acc03a56ee580c5641c329655ba5b39beacc344805e093502edbaa3ba637eef
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            platform=linux_amd64
+            sha256="$SHA256_LINUX_AMD64"
+            ;;
+          Linux/ARM64)
+            platform=linux_arm64
+            sha256="$SHA256_LINUX_ARM64"
+            ;;
+          macOS/ARM64)
+            platform=darwin_arm64
+            sha256="$SHA256_DARWIN_ARM64"
+            ;;
+          *)
+            echo "::error::op-apko ${VERSION} is not available for ${RUNNER_OS}/${RUNNER_ARCH}; supported: Linux/X64, Linux/ARM64, macOS/ARM64" >&2
+            exit 1
+            ;;
+        esac
+        archive_dir="$(mktemp -d "${RUNNER_TEMP}/op-apko-archive.XXXXXX")"
+        archive="${archive_dir}/op-apko_${VERSION#v}_${platform}.tar.gz"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors -o "$archive" \
+          "https://github.com/ethereum-optimism/apko/releases/download/${VERSION}/op-apko_${VERSION#v}_${platform}.tar.gz"
+        if [ "${RUNNER_OS}" = macOS ]; then
+          echo "${sha256}  ${archive}" | shasum -a 256 -c -
+        else
+          echo "${sha256}  ${archive}" | sha256sum -c -
+        fi
+        bin_dir="$(mktemp -d "${RUNNER_TEMP}/op-apko-bin.XXXXXX")"
+        tar -xzf "$archive" -C "$bin_dir" op-apko
+        chmod 0755 "${bin_dir}/op-apko"
+        version_output="$("${bin_dir}/op-apko" version)"
+        printf '%s\n' "$version_output"
+        git_version="$(printf '%s\n' "$version_output" | awk '$1 == "GitVersion:" { print $2 }')"
+        if [ "$git_version" != "$VERSION" ]; then
+          echo "::error::op-apko reports GitVersion '${git_version}', expected '${VERSION}'" >&2
+          exit 1
+        fi
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        echo "path=${bin_dir}/op-apko" >> "$GITHUB_OUTPUT"

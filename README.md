@@ -23,6 +23,10 @@ and validate them with service-owned integration tests.
 - `.github/workflows/renovate.yaml` — reusable self-hosted Renovate workflow.
   `renovate-config.json` — shared CVE-only Renovate baseline preset. See
   [Renovate](#renovate).
+- `actions/install-op-apko` and `actions/install-op-melange`: install pinned
+  op-apko and op-melange releases on linux/amd64, linux/arm64 and darwin/arm64
+  runners. Each release archive is checked against a pinned sha256. See
+  [Installing op-apko and op-melange](#installing-op-apko-and-op-melange).
 - `actions/parse-tag`: legacy composite action retained for compatibility;
   new consumers should use `actions/plan`.
 - `actions/agent-approval-check`: dependency-free approval gate for pull
@@ -112,6 +116,62 @@ it separate from the `release` environment used for image publishing.
 The calling repository's mise configuration must provide `goreleaser`, or the
 `mise-install-args` input must name it.
 
+
+## Installing op-apko and op-melange
+
+`actions/install-op-apko` and `actions/install-op-melange` install the
+op-apko release from `ethereum-optimism/apko` and the op-melange release from
+`ethereum-optimism/melange`. Each action pins one version and one sha256 per
+platform, downloads the release archive over HTTPS, verifies the sha256 before
+extracting, adds the binary to `PATH`, and fails unless `<binary> version`
+reports the pinned version. Supported runners are linux/amd64, linux/arm64 and
+darwin/arm64; any other platform fails.
+
+Pin the actions by full commit SHA:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: ethereum-optimism/factory/actions/install-op-apko@0000000000000000000000000000000000000000
+      - uses: ethereum-optimism/factory/actions/install-op-melange@0000000000000000000000000000000000000000
+      - run: |
+          op-apko version
+          op-melange version
+```
+
+Replace the placeholders with the factory commit SHA. The actions take no
+inputs and use no token, so the job needs no permissions beyond
+`contents: read`. Each action sets the output `path` to the absolute path of the
+installed binary.
+
+To bump a version, run `scripts/bump-op-tool.sh <apko|melange> <tag>`. It
+requires the release to be immutable, runs `gh release verify`, and checks every
+archive with `gh release verify-asset` and `gh attestation verify` against the
+factory GoReleaser workflow and the tag. It then prints the `env` block for the
+action. The `install-op-tools tests` workflow repeats this check for the pinned
+values on every change.
+
+To install a release locally on an Apple silicon Mac:
+
+```sh
+tool=apko
+tag=v1.5.3-op.1
+asset="op-${tool}_${tag#v}_darwin_arm64.tar.gz"
+gh release download "$tag" --repo "ethereum-optimism/${tool}" --pattern "$asset"
+gh attestation verify "$asset" \
+  --repo "ethereum-optimism/${tool}" \
+  --signer-workflow ethereum-optimism/factory/.github/workflows/goreleaser.yaml \
+  --source-ref "refs/tags/${tag}" \
+  --deny-self-hosted-runners
+tar -xzf "$asset" "op-${tool}"
+./op-${tool} version
+```
+
+Use `tool=melange` and `tag=v0.66.0-op.1` for op-melange.
 
 ## `images.json`
 
