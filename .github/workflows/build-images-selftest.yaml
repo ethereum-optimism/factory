@@ -45,7 +45,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install op-apko
+        id: apko_bin
+        uses: ./actions/install-op-apko
+
       - name: Build the apko fixture with the publish mounts
+        env:
+          APKO_BIN: ${{ steps.apko_bin.outputs.path }}
         run: |
           set -euo pipefail
           source actions/publish-image/apko-mounts.sh
@@ -56,6 +62,7 @@ jobs:
           apko_container_layout "$config_dir" "$out_dir"
           docker run --rm --network host --entrypoint /usr/bin/apko \
             --workdir "$apko_workdir" \
+            -v "${APKO_BIN}:/usr/bin/apko:ro" \
             "${apko_mounts[@]}" \
             "$sandbox" \
             build --ignore-signatures --arch amd64 \
@@ -68,3 +75,36 @@ jobs:
             exit 1
           fi
           echo "index revision: $revision"
+
+  apko-sandbox-version:
+    name: apko in the sandbox is the pinned op-apko
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Install op-apko
+        id: apko_bin
+        uses: ./actions/install-op-apko
+
+      - name: Check apko version inside the sandbox
+        env:
+          APKO_BIN: ${{ steps.apko_bin.outputs.path }}
+        run: |
+          set -euo pipefail
+          expected="$(yq '.runs.steps[0].env.VERSION' actions/install-op-apko/action.yml)"
+          sandbox="$(tr -d '[:space:]' < actions/apko-sdk/image)"
+          output="$(docker run --rm --network none --entrypoint /usr/bin/apko \
+            -v "${APKO_BIN}:/usr/bin/apko:ro" \
+            "$sandbox" version)"
+          printf '%s\n' "$output"
+          actual="$(printf '%s\n' "$output" | awk '$1 == "GitVersion:" { print $2 }')"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::apko in the sandbox reports '${actual}', expected '${expected}'" >&2
+            exit 1
+          fi
+          echo "apko in the sandbox: $actual"

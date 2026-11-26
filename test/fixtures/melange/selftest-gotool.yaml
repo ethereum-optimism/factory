@@ -1,0 +1,28 @@
+package:
+  name: selftest-gotool
+  version: 1.0.0
+  epoch: 0
+  description: Go fixture package for the build-images self-test
+  copyright:
+    - license: MIT
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - wolfi-baselayout
+      - busybox
+      - go
+  environment:
+    CGO_ENABLED: "0"
+    GOTOOLCHAIN: local
+    GOFLAGS: -buildvcs=false -trimpath
+
+pipeline:
+  - working-directory: test/fixtures/melange/gotool
+    runs: |
+      mkdir -p "${{targets.destdir}}/usr/bin"
+      go build -ldflags="-s -w" -o "${{targets.destdir}}/usr/bin/selftest-gotool" .

@@ -100,7 +100,8 @@
         "apko": {
           "config": "test/fixtures/apko/pkg.yaml",
           "needs_packages": [
-            "selftest-tool"
+            "selftest-tool",
+            "selftest-gotool"
           ]
         }
       },
@@ -117,6 +118,12 @@
   "packages": {
     "selftest-tool": {
       "config": "test/fixtures/melange/selftest-tool.yaml",
+      "archs": [
+        "x86_64"
+      ]
+    },
+    "selftest-gotool": {
+      "config": "test/fixtures/melange/selftest-gotool.yaml",
       "archs": [
         "x86_64"
       ]
