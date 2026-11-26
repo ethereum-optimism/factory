@@ -248,40 +248,9 @@ runs:
         fi
         echo "bubblewrap (bwrap) installed successfully."
 
-    - name: Install melange
-      shell: bash
-      env:
-        MELANGE_VERSION: v0.50.8
-        MELANGE_SHA256_AMD64: 6a2d74a411cd4fb08fdeb33e94e188b2939b7ccf2052fc15dcffd578a2410d04
-        MELANGE_SHA256_ARM64: 6e68f6ecdff399d965e0d02ca593d94ec5a8e8b57975ce82610ad69f21e495f9
-      run: |
-        set -euo pipefail
-        case "$(uname -m)" in
-          x86_64)
-            melange_arch=amd64
-            melange_sha256="$MELANGE_SHA256_AMD64"
-            ;;
-          aarch64)
-            melange_arch=arm64
-            melange_sha256="$MELANGE_SHA256_ARM64"
-            ;;
-          *)
-            echo "::error::unsupported runner architecture: $(uname -m)" >&2
-            exit 1
-            ;;
-        esac
-        without_v="${MELANGE_VERSION#v}"
-        archive_dir="$(mktemp -d "${RUNNER_TEMP}/melange-archive.XXXXXX")"
-        archive="${archive_dir}/melange.tar.gz"
-        curl -fsSL --retry 5 --retry-all-errors -o "$archive" \
-          "https://github.com/chainguard-dev/melange/releases/download/${MELANGE_VERSION}/melange_${without_v}_linux_${melange_arch}.tar.gz"
-        echo "${melange_sha256}  ${archive}" | sha256sum -c -
-        bin_dir="${RUNNER_TEMP}/melange-bin"
-        mkdir -p "$bin_dir"
-        tar -xzf "$archive" -C "$bin_dir" --strip-components=1 "melange_${without_v}_linux_${melange_arch}/melange"
-        chmod +x "${bin_dir}/melange"
-        echo "$bin_dir" >> "$GITHUB_PATH"
-        "${bin_dir}/melange" version
+    - name: Install op-melange
+      id: melange
+      uses: ./.factory/actions/install-op-melange
 
     - name: Prepare melange cache directory
       shell: bash
@@ -312,6 +281,7 @@ runs:
         SOURCE_COMMIT: ${{ steps.source_metadata.outputs.commit }}
         SOURCE_DATE: ${{ steps.source_metadata.outputs.date }}
         BUILD_ROOT: ${{ steps.build_root.outputs.build_root }}
+        MELANGE_BIN: ${{ steps.melange.outputs.path }}
       run: |
         set -euo pipefail
         metadata_env="${RUNNER_TEMP}/melange-build.env"
@@ -342,7 +312,7 @@ runs:
         echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
         cd "$BUILD_ROOT"
         sudo env "PATH=$PATH" \
-          melange build "$MELANGE_CONFIG" \
+          "$MELANGE_BIN" build "$MELANGE_CONFIG" \
           --arch "$MELANGE_ARCH" \
           --out-dir "${GITHUB_WORKSPACE}/apk-packages" \
           --source-dir "${GITHUB_WORKSPACE}/${SOURCE_PATH}" \

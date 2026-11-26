@@ -78,7 +78,11 @@ The run is either trusted or untrusted, decided once by
 
 The planner is `actions/plan-images`. The step actions are
 `actions/build-packages`, `actions/stage-packages`, `actions/build-image`,
-`actions/smoke-test`, and `actions/publish-image`. The self-test workflow
+`actions/smoke-test`, and `actions/publish-image`. Packages are built with
+op-melange from `actions/install-op-melange`, so package SBOMs list the Go
+modules compiled into Go binaries as `pkg:golang` purls. apko runs in the
+pinned Wolfi SDK image with the op-apko binary from `actions/install-op-apko`
+mounted read-only over `/usr/bin/apko`. The self-test workflow
 `.github/workflows/build-images-selftest.yaml` runs the untrusted path on every
 pull request against the fixtures in `test/fixtures/`, and
 `scripts/lint-untrusted-permissions.sh` checks the permission and credential

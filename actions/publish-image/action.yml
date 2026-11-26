@@ -121,6 +121,11 @@ runs:
         set -euo pipefail
         echo "image=$(tr -d '[:space:]' < "${GITHUB_ACTION_PATH}/../apko-sdk/image")" >> "$GITHUB_OUTPUT"
 
+    - name: Install op-apko
+      id: apko_bin
+      if: inputs.kind == 'apko'
+      uses: ./.factory/actions/install-op-apko
+
     - name: Set up Docker Buildx
       if: inputs.kind != 'apko'
       uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -131,6 +136,7 @@ runs:
       shell: bash
       env:
         APKO_SANDBOX: ${{ steps.sandbox.outputs.image }}
+        APKO_BIN: ${{ steps.apko_bin.outputs.path }}
         APKO_CONFIG: ${{ inputs.config }}
         APKO_TAG: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.sha_tag }}
         APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.ref_tag }}
@@ -160,7 +166,7 @@ runs:
 
         source "${GITHUB_ACTION_PATH}/apko-mounts.sh"
         apko_container_layout "$config_dir" "$out_dir"
-        mounts=("${apko_mounts[@]}")
+        mounts=(-v "${APKO_BIN}:/usr/bin/apko:ro" "${apko_mounts[@]}")
         if [ -n "$APKO_REPOSITORIES" ]; then
           IFS=',' read -ra repos <<< "$APKO_REPOSITORIES"
           for repo in "${repos[@]}"; do
