@@ -45,9 +45,11 @@ approval_rules:
         pattern: '^renovate/'
       only_changed_files:
         paths:
-          - '(^|/)go\.(mod|sum)$'
+          - '(^|/)go\.mod$'
+          - '(^|/)go\.sum$'
           - '(^|/)uv\.lock$'
-          - '(^|/)Pipfile(\.lock)?$'
+          - '(^|/)Pipfile$'
+          - '(^|/)Pipfile\.lock$'
           - '(^|/)requirements\.txt$'
           - '(^|/)yarn\.lock$'
     requires:

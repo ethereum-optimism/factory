@@ -31,6 +31,14 @@ func TestCheckRejectsWeakenedPolicies(t *testing.T) {
 		return replace("  - name: '"+rule+"'\n", "  - name: '"+rule+"'\n    options:\n      "+option+"\n")
 	}
 
+	yarn := `          - '(^|/)yarn\.lock$'` + "\n"
+	addPath := func(pattern string) string {
+		return replace(yarn, yarn+"          - '"+pattern+"'\n")
+	}
+	setBranch := func(pattern string) string {
+		return replace("pattern: '^renovate/'", "pattern: '"+pattern+"'")
+	}
+
 	cases := map[string]string{
 		"allow author":                 replace("allow_author: false", "allow_author: true"),
 		"allow contributor":            replace("allow_contributor: false", "allow_contributor: true"),
@@ -54,7 +62,7 @@ func TestCheckRejectsWeakenedPolicies(t *testing.T) {
 		"approver write permission":    replace("      count: 2\n      teams: ['ethereum-optimism/engineering']", "      count: 2\n      permissions: ['write']"),
 		"approver other team":          replace("      count: 2\n      teams: ['ethereum-optimism/engineering']", "      count: 2\n      teams: ['ethereum-optimism/other']"),
 		"human rule for org":           replace("      has_author_in:\n        teams: ['ethereum-optimism/engineering']", "      has_author_in:\n        organizations: ['ethereum-optimism']"),
-		"lane without paths":           replace("      only_changed_files:\n        paths:\n          - '(^|/)go\\.(mod|sum)$'\n          - '(^|/)uv\\.lock$'\n          - '(^|/)Pipfile(\\.lock)?$'\n          - '(^|/)requirements\\.txt$'\n          - '(^|/)yarn\\.lock$'\n", ""),
+		"lane without paths":           replace("      only_changed_files:\n        paths:\n          - '(^|/)go\\.mod$'\n          - '(^|/)go\\.sum$'\n          - '(^|/)uv\\.lock$'\n          - '(^|/)Pipfile$'\n          - '(^|/)Pipfile\\.lock$'\n          - '(^|/)requirements\\.txt$'\n          - '(^|/)yarn\\.lock$'\n", ""),
 		"lane other contributors":      replace("      only_has_contributors_in:\n        users: ['renovate[bot]']", "      only_has_contributors_in:\n        users: ['renovate[bot]', 'someone']"),
 		"lane without signer":          replace("      has_valid_signatures_by:\n        users: ['web-flow']\n", ""),
 		"lane without branch":          replace("      from_branch:\n        pattern: '^renovate/'\n", ""),
@@ -62,6 +70,15 @@ func TestCheckRejectsWeakenedPolicies(t *testing.T) {
 		"lane dot star path":           replace("          - '(^|/)yarn\\.lock$'\n", "          - '(^|/)yarn\\.lock$'\n          - '^.*$'\n"),
 		"lane policy file path":        replace("          - '(^|/)yarn\\.lock$'\n", "          - '(^|/)yarn\\.lock$'\n          - '^\\.policy\\.yml$'\n"),
 		"lane values file path":        replace("          - '(^|/)yarn\\.lock$'\n", "          - '(^|/)yarn\\.lock$'\n          - '(^|/)policy-bot-values\\.yml$'\n"),
+		"lane extensions path":         addPath(`^.*\.(rs|py|js|ts|sol|sh)$`),
+		"lane extension group path":    addPath(`^(.*\.(rs|py|sol|ts|js|sh|c|cpp|java))$`),
+		"lane any makefile path":       addPath(`^.*/Makefile$`),
+		"lane class path":              addPath(`^[a-z]+/.*\.(rs|py|sol)$`),
+		"lane unescaped dot path":      addPath(`(^|/)go.work$`),
+		"lane directory path":          addPath(`(^|/)docs/a\.md$`),
+		"lane alternation branch":      setBranch(`^renovate/|^[a-z]+/[a-z]+/.*$`),
+		"lane group branch":            setBranch(`^(renovate/|[a-z]+/[a-z]+/)`),
+		"lane unterminated branch":     setBranch(`^renovate`),
 		"lane human author":            replace("      has_author_in:\n        users: ['renovate[bot]']", "      has_author_in:\n        users: ['someone']"),
 		"default rule unreferenced":    replace("        - 'no accountable human author'\n", ""),
 		"and instead of or":            replace("    - or:\n", "    - and:\n"),
@@ -87,5 +104,47 @@ func TestCheckAcceptsStricterPolicies(t *testing.T) {
 	stricter := strings.Replace(base, "      count: 1\n", "      count: 2\n", 1)
 	if err := Check([]byte(stricter)); err != nil {
 		t.Fatalf("stricter policy rejected: %v", err)
+	}
+}
+
+func TestLanePatternShapes(t *testing.T) {
+	for _, f := range []string{"go.mod", "go.sum", "uv.lock", "Pipfile", "Pipfile.lock", "requirements.txt", "yarn.lock"} {
+		if problem := pathProblem(PathPattern(f)); problem != "" {
+			t.Errorf("rendered path for %s rejected: %s", f, problem)
+		}
+	}
+	if problem := branchProblem(BranchPattern("renovate")); problem != "" {
+		t.Errorf("rendered branch rejected: %s", problem)
+	}
+	for _, p := range []string{
+		`^.*\.(rs|py|js|ts|sol|sh)$`,
+		`^(.*\.(rs|py|sol|ts|js|sh|c|cpp|java))$`,
+		`^.*/Makefile$`,
+		`^[a-z]+/.*\.(rs|py|sol)$`,
+		`.*`,
+		`^.*$`,
+		`^|.*$`,
+		`(^|/).*$`,
+		`(^|/)go.mod$`,
+		`(^|/)go\.(mod|sum)$`,
+		`(^|/)\w+$`,
+		`(^|/)docs/a\.md$`,
+	} {
+		if pathProblem(p) == "" {
+			t.Errorf("path %q accepted", p)
+		}
+	}
+	for _, b := range []string{
+		`^renovate/|^[a-z]+/[a-z]+/.*$`,
+		`^(renovate/|[a-z]+/[a-z]+/)`,
+		`^.*`,
+		`^renovate`,
+		`renovate/`,
+		`^renovate/.*`,
+		`^re.ovate/`,
+	} {
+		if branchProblem(b) == "" {
+			t.Errorf("branch %q accepted", b)
+		}
 	}
 }

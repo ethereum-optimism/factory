@@ -42,25 +42,14 @@ approval_rules:
         users: [{{ q .App }}]
       only_has_contributors_in:
         users: [{{ q .App }}]
-{{- if .Signer }}
       has_valid_signatures_by:
         users: [{{ q .Signer }}]
-{{- end }}
-{{- if .Branch }}
       from_branch:
         pattern: {{ q .Branch }}
-{{- end }}
       only_changed_files:
         paths:
 {{- range .Paths }}
           - {{ q . }}
-{{- end }}
-{{- if .ExcludePaths }}
-      no_changed_files:
-        paths:
-{{- range .ExcludePaths }}
-          - {{ q . }}
-{{- end }}
 {{- end }}
     requires:
       count: 1

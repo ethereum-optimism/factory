@@ -40,7 +40,30 @@ var (
 	canaryBranches = []string{"", "main", "feature/x"}
 )
 
-func pathProblem(pattern string, re *regexp.Regexp) string {
+var (
+	literalName    = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	renderedPath   = regexp.MustCompile(`^\(\^\|/\)(?:[A-Za-z0-9_-]|\\\.)+\$$`)
+	renderedBranch = regexp.MustCompile(`^\^(?:[A-Za-z0-9_-]|\\\.)+/$`)
+	onlyDots       = regexp.MustCompile(`^\.+$`)
+)
+
+func escapeLiteral(s string) string {
+	return strings.ReplaceAll(s, ".", `\.`)
+}
+
+func PathPattern(file string) string {
+	return `(^|/)` + escapeLiteral(file) + `$`
+}
+
+func BranchPattern(prefix string) string {
+	return `^` + escapeLiteral(prefix) + `/`
+}
+
+func pathProblem(pattern string) string {
+	if !renderedPath.MatchString(pattern) {
+		return fmt.Sprintf("path %q must have the form (^|/)<file name>$ with only letters, digits, _, - and escaped dots", pattern)
+	}
+	re := regexp.MustCompile(pattern)
 	for _, c := range canaryPaths {
 		if re.MatchString(c) {
 			return fmt.Sprintf("path %q matches %q, which a lane must never cover", pattern, c)
@@ -49,14 +72,22 @@ func pathProblem(pattern string, re *regexp.Regexp) string {
 	return ""
 }
 
-func branchProblem(pattern string, re *regexp.Regexp) string {
-	if !strings.HasPrefix(pattern, "^") {
-		return fmt.Sprintf("branch pattern %q must be anchored with ^", pattern)
+func branchProblem(pattern string) string {
+	if !renderedBranch.MatchString(pattern) {
+		return fmt.Sprintf("branch pattern %q must have the form ^<prefix>/ with only letters, digits, _, - and escaped dots", pattern)
 	}
+	re := regexp.MustCompile(pattern)
 	for _, c := range canaryBranches {
 		if re.MatchString(c) {
 			return fmt.Sprintf("branch pattern %q matches %q, which a lane must never cover", pattern, c)
 		}
+	}
+	return ""
+}
+
+func literalProblem(kind, s string) string {
+	if !literalName.MatchString(s) || onlyDots.MatchString(s) {
+		return fmt.Sprintf("%s %q must be a plain name of letters, digits, _, - and .", kind, s)
 	}
 	return ""
 }
@@ -70,16 +101,24 @@ type Lane struct {
 	Description  string   `yaml:"description"`
 	App          string   `yaml:"app"`
 	Signer       string   `yaml:"signer"`
-	Branch       string   `yaml:"branch"`
-	Paths        []string `yaml:"paths"`
-	ExcludePaths []string `yaml:"exclude_paths"`
+	BranchPrefix string   `yaml:"branch_prefix"`
+	Files        []string `yaml:"files"`
+}
+
+type renderedLane struct {
+	Name        string
+	Description string
+	App         string
+	Signer      string
+	Branch      string
+	Paths       []string
 }
 
 type templateData struct {
 	Team        string
 	HumanRule   string
 	DefaultRule string
-	Automation  []Lane
+	Automation  []renderedLane
 }
 
 func ParseValues(data []byte) (*Values, error) {
@@ -116,34 +155,24 @@ func (v *Values) validate() error {
 		if !userLogin.MatchString(l.Signer) {
 			return errors.Errorf("%s: signer %q is required and must be a GitHub login", where, l.Signer)
 		}
-		if l.Branch == "" {
-			return errors.Errorf("%s: branch is required", where)
+		if l.BranchPrefix == "" {
+			return errors.Errorf("%s: branch_prefix is required", where)
 		}
-		branch, err := regexp.Compile(l.Branch)
-		if err != nil {
-			return errors.Wrapf(err, "%s: invalid branch pattern", where)
-		}
-		if problem := branchProblem(l.Branch, branch); problem != "" {
+		if problem := literalProblem("branch_prefix", l.BranchPrefix); problem != "" {
 			return errors.Errorf("%s: %s", where, problem)
 		}
-		if len(l.Paths) == 0 {
-			return errors.Errorf("%s: at least one path is required", where)
+		if problem := branchProblem(BranchPattern(l.BranchPrefix)); problem != "" {
+			return errors.Errorf("%s: %s", where, problem)
 		}
-		for _, p := range l.Paths {
-			re, err := regexp.Compile(p)
-			if err != nil {
-				return errors.Wrapf(err, "%s: invalid path %q", where, p)
-			}
-			if problem := pathProblem(p, re); problem != "" {
+		if len(l.Files) == 0 {
+			return errors.Errorf("%s: at least one file is required", where)
+		}
+		for _, f := range l.Files {
+			if problem := literalProblem("file", f); problem != "" {
 				return errors.Errorf("%s: %s", where, problem)
 			}
-			if !strings.Contains(p, "^") || !strings.HasSuffix(p, "$") {
-				return errors.Errorf("%s: path %q must be anchored with ^ and $", where, p)
-			}
-		}
-		for _, p := range l.ExcludePaths {
-			if _, err := regexp.Compile(p); err != nil {
-				return errors.Wrapf(err, "%s: invalid exclude path %q", where, p)
+			if problem := pathProblem(PathPattern(f)); problem != "" {
+				return errors.Errorf("%s: %s", where, problem)
 			}
 		}
 	}
@@ -164,7 +193,19 @@ func Render(v *Values) ([]byte, error) {
 		Team:        ApproverTeam,
 		HumanRule:   HumanRule,
 		DefaultRule: DefaultRule,
-		Automation:  v.Automation,
+	}
+	for _, l := range v.Automation {
+		r := renderedLane{
+			Name:        l.Name,
+			Description: l.Description,
+			App:         l.App,
+			Signer:      l.Signer,
+			Branch:      BranchPattern(l.BranchPrefix),
+		}
+		for _, f := range l.Files {
+			r.Paths = append(r.Paths, PathPattern(f))
+		}
+		data.Automation = append(data.Automation, r)
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, errors.Wrap(err, "failed to render template")

@@ -45,12 +45,12 @@ func TestRenderGolden(t *testing.T) {
 func TestValuesRejected(t *testing.T) {
 	lane := func(extra string) string {
 		base := map[string]string{
-			"name":        "bot lane",
-			"description": "d",
-			"app":         "bot[bot]",
-			"signer":      "web-flow",
-			"branch":      "'^bot/'",
-			"paths":       "['^deps/lock\\.json$']",
+			"name":          "bot lane",
+			"description":   "d",
+			"app":           "bot[bot]",
+			"signer":        "web-flow",
+			"branch_prefix": "bot",
+			"files":         "['lock.json']",
 		}
 		for _, kv := range strings.Split(extra, ";") {
 			if kv == "" {
@@ -66,7 +66,7 @@ func TestValuesRejected(t *testing.T) {
 		var b strings.Builder
 		b.WriteString("automation:\n  - ")
 		first := true
-		for _, k := range []string{"name", "description", "app", "signer", "branch", "paths", "exclude_paths", "count"} {
+		for _, k := range []string{"name", "description", "app", "signer", "branch_prefix", "files", "branch", "paths", "count"} {
 			v, ok := base[k]
 			if !ok {
 				continue
@@ -85,32 +85,37 @@ func TestValuesRejected(t *testing.T) {
 	}
 
 	cases := map[string]string{
-		"reserved human name":   lane("name='human change'"),
-		"reserved default name": lane("name='no accountable human author'"),
-		"missing name":          lane("name="),
-		"missing description":   lane("description="),
-		"user not app":          lane("app=someone"),
-		"team as app":           lane("app='org/team'"),
-		"missing paths":         lane("paths="),
-		"empty paths":           lane("paths=[]"),
-		"missing signer":        lane("signer="),
-		"missing branch":        lane("branch="),
-		"broad branch":          lane("branch='^.*'"),
-		"branch matching main":  lane("branch='^ma'"),
-		"dot star path":         lane("paths=['.*']"),
-		"anchored dot star":     lane("paths=['^.*$']"),
-		"empty alternative":     lane("paths=['^|.*$']"),
-		"any file in any dir":   lane("paths=['(^|/).*$']"),
-		"policy file path":      lane("paths=['^\\.policy\\.yml$']"),
-		"values file path":      lane("paths=['^\\.github/policy-bot-values\\.yml$']"),
-		"workflow paths":        lane("paths=['^\\.github/workflows/[^/]+$']"),
-		"dot dot path":          lane("paths=['(^|/)y$']"),
-		"unanchored path":       lane("paths=['go.mod']"),
-		"unterminated path":     lane("paths=['^docs/']"),
-		"bad regexp":            lane("paths=['^(a$']"),
-		"unanchored branch":     lane("branch='renovate/'"),
-		"bad signer":            lane("signer='a b'"),
-		"unknown key":           lane("count=0"),
+		"reserved human name":    lane("name='human change'"),
+		"reserved default name":  lane("name='no accountable human author'"),
+		"missing name":           lane("name="),
+		"missing description":    lane("description="),
+		"user not app":           lane("app=someone"),
+		"team as app":            lane("app='org/team'"),
+		"missing files":          lane("files="),
+		"empty files":            lane("files=[]"),
+		"missing signer":         lane("signer="),
+		"missing branch prefix":  lane("branch_prefix="),
+		"regex branch":           lane("branch_prefix='^.*'"),
+		"branch with slash":      lane("branch_prefix='renovate/x'"),
+		"branch alternation":     lane("branch_prefix='renovate/|^[a-z]+/[a-z]+/.*'"),
+		"branch group":           lane("branch_prefix='(renovate/|[a-z]+/[a-z]+/)'"),
+		"branch dots only":       lane("branch_prefix='..'"),
+		"file dot star":          lane("files=['.*']"),
+		"file regex":             lane("files=['^.*$']"),
+		"file empty alternative": lane("files=['^|.*$']"),
+		"file any":               lane("files=['(^|/).*$']"),
+		"file extensions":        lane("files=['^.*\\.(rs|py|js|ts|sol|sh)$']"),
+		"file extension group":   lane("files=['^(.*\\.(rs|py|sol|ts|js|sh|c|cpp|java))$']"),
+		"file any makefile":      lane("files=['^.*/Makefile$']"),
+		"file class":             lane("files=['^[a-z]+/.*\\.(rs|py|sol)$']"),
+		"file with directory":    lane("files=['docs/a.md']"),
+		"file policy":            lane("files=['.policy.yml']"),
+		"file values":            lane("files=['policy-bot-values.yml']"),
+		"file dockerfile":        lane("files=['Dockerfile']"),
+		"file canary a":          lane("files=['a']"),
+		"file dots only":         lane("files=['..']"),
+		"old regex keys":         lane("files=;branch_prefix=;branch='^bot/';paths=['(^|/)go\\.mod$']"),
+		"unknown key":            lane("count=0"),
 	}
 	for name, values := range cases {
 		t.Run(name, func(t *testing.T) {

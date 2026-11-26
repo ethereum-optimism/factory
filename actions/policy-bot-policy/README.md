@@ -17,7 +17,7 @@ signed commits.
 | Rule | Applies when | Approvals |
 | --- | --- | --- |
 | `human change` | the pull request was opened by an engineering member | 1 |
-| one rule per automation lane | opened by that App from its branch prefix, no commit linked to any other account, every commit validly signed by the lane's signer, only the listed paths changed | 1 |
+| one rule per automation lane | opened by that App from its branch prefix, no commit linked to any other account, every commit validly signed by the lane's signer, only files with the listed names changed | 1 |
 | `no accountable human author` | always (agents, bots, machine users, outside contributors, unknown accounts, automation outside its lane) | 2 |
 
 The policy is the `or` of these rules. The last rule has no condition, so the
@@ -33,19 +33,23 @@ automation:
     description: Opened by renovate from a renovate branch, dependency manifests only. One listed human approves.
     app: renovate[bot]
     signer: web-flow
-    branch: '^renovate/'
-    paths:
-      - '(^|/)go\.(mod|sum)$'
-    exclude_paths: []
+    branch_prefix: renovate
+    files:
+      - go.mod
+      - go.sum
 ```
 
-`app` must be a GitHub App login. `signer` and `branch` are required. `branch`
-must start with `^` and must not match `main`, `feature/x` or the empty string.
-Each entry of `paths` must contain `^` and end with `$`, and must not match any
-of these probe paths: the empty string, `a`, `src/main.go`,
-`.github/workflows/x.yml`, `Dockerfile`, `.policy.yml`,
-`.github/policy-bot-values.yml`, `x/../y`. `exclude_paths` is optional.
-`automation: []` renders the common part only.
+`app` must be a GitHub App login. `signer`, `branch_prefix` and at least one
+entry in `files` are required. `branch_prefix` and each entry of `files` are
+plain names made of letters, digits, `_`, `-` and `.`; patterns, slashes and
+names made only of dots are rejected. The renderer escapes the dots and builds
+the patterns: `branch_prefix: renovate` becomes `^renovate/`, and `go.mod`
+becomes `(^|/)go\.mod$`, which matches a file with exactly that name in any
+directory. As a second layer, no rendered pattern may match any of these probe
+paths: the empty string, `a`, `src/main.go`, `.github/workflows/x.yml`,
+`Dockerfile`, `.policy.yml`, `.github/policy-bot-values.yml`, `x/../y`; nor
+the branches `main`, `feature/x` or the empty string. `automation: []` renders
+the common part only.
 
 ## Requirements for a gated repository
 
@@ -72,8 +76,9 @@ rule allows author, contributor or comment approvals, disables
 `invalidate_on_push`, enables `ignore_update_merges` or `ignore_commits_by`,
 accepts approvers other than the engineering team, lacks the unconditional
 two-approval rule, or gives one approval to anything other than the human
-author rule or a lane with one App, one signer, an anchored branch pattern and
-a path list that passes the probe paths above. With `-values`, the
+author rule or a lane with one App, one signer, a branch pattern of exactly
+the form `^<prefix>/` and paths of exactly the form `(^|/)<file name>$` (the
+shapes the renderer produces), all of which pass the probe checks above. With `-values`, the
 file must also be byte-equal to the rendering.
 
 From a workflow, call the reusable workflow

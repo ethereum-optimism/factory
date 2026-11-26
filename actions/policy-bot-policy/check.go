@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"slices"
 	"sort"
 
@@ -192,8 +191,7 @@ func isAutomationLane(r *approval.Rule) bool {
 	if p.FromBranch == nil || p.FromBranch.Pattern.IsZero() {
 		return false
 	}
-	branch := p.FromBranch.Pattern.String()
-	if branchProblem(branch, regexp.MustCompile(branch)) != "" {
+	if branchProblem(p.FromBranch.Pattern.String()) != "" {
 		return false
 	}
 	return hasNarrowPaths(p.OnlyChangedFiles)
@@ -204,8 +202,7 @@ func hasNarrowPaths(f *predicate.OnlyChangedFiles) bool {
 		return false
 	}
 	for _, p := range f.Paths {
-		pattern := p.String()
-		if pathProblem(pattern, regexp.MustCompile(pattern)) != "" {
+		if pathProblem(p.String()) != "" {
 			return false
 		}
 	}
