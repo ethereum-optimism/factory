@@ -81,9 +81,11 @@ jobs:
           set -euo pipefail
           mkdir -p .tamper
           cp -R actions/install-op-apko .tamper/install-op-apko
-          sed -i -E 's/^( +SHA256_LINUX_AMD64: ).*/\10000000000000000000000000000000000000000000000000000000000000000/' .tamper/install-op-apko/action.yml
-          if cmp -s actions/install-op-apko/action.yml .tamper/install-op-apko/action.yml; then
-            echo "::error::sha256 was not altered" >&2
+          yq -i '.runs.steps[0].env.SHA256_LINUX_AMD64 = .runs.steps[0].env.SHA256_LINUX_ARM64' .tamper/install-op-apko/action.yml
+          original="$(yq '.runs.steps[0].env.SHA256_LINUX_AMD64' actions/install-op-apko/action.yml)"
+          altered="$(yq '.runs.steps[0].env.SHA256_LINUX_AMD64' .tamper/install-op-apko/action.yml)"
+          if [ "$original" = "$altered" ] || ! [[ "$altered" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::sha256 was not replaced with a different well-formed digest" >&2
             exit 1
           fi
 
