@@ -1,0 +1,74 @@
+policy:
+  approval:
+    - or:
+        - {{ q .HumanRule }}
+{{- range .Automation }}
+        - {{ q .Name }}
+{{- end }}
+        - {{ q .DefaultRule }}
+
+approval_defaults:
+  options:
+    allow_author: false
+    allow_contributor: false
+    allow_non_author_contributor: false
+    invalidate_on_push: true
+    ignore_edited_comments: true
+    ignore_update_merges: false
+    request_review:
+      enabled: false
+    methods:
+      comments: []
+      comment_patterns: []
+      body_patterns: []
+      github_review_comment_patterns: []
+      github_review: true
+
+approval_rules:
+  - name: {{ q .HumanRule }}
+    description: {{ q "Opened by a listed human, who is accountable for the whole change. One other listed human who has no commit on the pull request approves." }}
+    if:
+      has_author_in:
+        teams: [{{ q .Team }}]
+    requires:
+      count: 1
+      teams: [{{ q .Team }}]
+{{- range .Automation }}
+
+  - name: {{ q .Name }}
+    description: {{ q .Description }}
+    if:
+      has_author_in:
+        users: [{{ q .App }}]
+      only_has_contributors_in:
+        users: [{{ q .App }}]
+{{- if .Signer }}
+      has_valid_signatures_by:
+        users: [{{ q .Signer }}]
+{{- end }}
+{{- if .Branch }}
+      from_branch:
+        pattern: {{ q .Branch }}
+{{- end }}
+      only_changed_files:
+        paths:
+{{- range .Paths }}
+          - {{ q . }}
+{{- end }}
+{{- if .ExcludePaths }}
+      no_changed_files:
+        paths:
+{{- range .ExcludePaths }}
+          - {{ q . }}
+{{- end }}
+{{- end }}
+    requires:
+      count: 1
+      teams: [{{ q $.Team }}]
+{{- end }}
+
+  - name: {{ q .DefaultRule }}
+    description: {{ q "Default for everything else: opened by an agent, bot, machine user, outside contributor or unknown account, or automation outside its lane. Two listed humans approve." }}
+    requires:
+      count: 2
+      teams: [{{ q .Team }}]

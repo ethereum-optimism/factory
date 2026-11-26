@@ -1,0 +1,32 @@
+name: policy-bot policy check
+description: Parse a policy-bot .policy.yml with the policy-bot v1.42.1 policy package, enforce the approval gate invariants and, when a values file is given, require the file to equal its rendering
+
+inputs:
+  policy:
+    description: Path to the policy file, relative to the workspace
+    default: .policy.yml
+  values:
+    description: Optional path to the values file, relative to the workspace. When set, the policy file must equal the rendering of this file
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache: false
+
+    - name: Check policy
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        POLICY: ${{ inputs.policy }}
+        VALUES: ${{ inputs.values }}
+      run: |
+        args=(-policy "$GITHUB_WORKSPACE/$POLICY")
+        if [[ -n "$VALUES" ]]; then
+          args+=(-values "$GITHUB_WORKSPACE/$VALUES")
+        fi
+        go run . check "${args[@]}"

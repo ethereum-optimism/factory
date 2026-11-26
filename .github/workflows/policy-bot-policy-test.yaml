@@ -1,0 +1,50 @@
+name: policy-bot policy tests
+
+on:
+  pull_request:
+    paths:
+      - actions/policy-bot-policy/**
+      - .github/workflows/policy-bot-policy*.yaml
+  push:
+    branches: [main]
+    paths:
+      - actions/policy-bot-policy/**
+      - .github/workflows/policy-bot-policy*.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: actions/policy-bot-policy/go.mod
+          cache: false
+
+      - name: Vet and test
+        working-directory: actions/policy-bot-policy
+        run: |
+          go mod verify
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: Check renovate-lane fixture through the action
+        uses: ./actions/policy-bot-policy
+        with:
+          policy: actions/policy-bot-policy/testdata/renovate-lane/policy.yml
+          values: actions/policy-bot-policy/testdata/renovate-lane/values.yml
+
+      - name: Check no-automation fixture through the action
+        uses: ./actions/policy-bot-policy
+        with:
+          policy: actions/policy-bot-policy/testdata/no-automation/policy.yml
+          values: actions/policy-bot-policy/testdata/no-automation/values.yml
