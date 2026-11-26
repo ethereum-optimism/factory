@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       - name: Check policy
-        uses: ethereum-optimism/factory/actions/policy-bot-policy@d07f433728ea18de6a60fe74247028b1951077d6
+        uses: ethereum-optimism/factory/actions/policy-bot-policy@6f303e28c02619488d5589ccd5d9b593fb11c32c
         with:
           policy: ${{ inputs.policy }}
           values: ${{ inputs.values }}
