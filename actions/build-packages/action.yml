@@ -1,7 +1,10 @@
 name: 'Build packages'
 description: >
   Build one melange package for one architecture and upload its APK repository
-  as the artifact apks-<package>-<arch>. Optionally checks out a source
+  as the artifact apks-<package>-<arch>, signed with a key generated for the
+  run, and the sha256 of every produced .apk as apk-digests-<package>-<arch>.
+  With env_lockfile, the build environment is installed offline from the
+  apk-cache artifact with the lock file's strong checksums. Optionally checks out a source
   repository, restores and saves the melange cache, and applies build
   environment entries. Uses no secrets and no OIDC token.
 
@@ -71,6 +74,19 @@ inputs:
     description: '"true" to remove preinstalled hosted-runner toolchains before the build.'
     required: false
     default: 'false'
+  env_lockfile:
+    description: 'melange environment lock file, relative to the workspace. Empty resolves the environment from the network.'
+    required: false
+    default: ''
+  apk_cache_dir:
+    description: 'With env_lockfile: apko cache directory from the apk-cache artifact.'
+    required: false
+    default: ''
+
+outputs:
+  digests:
+    description: 'One <name>=sha256:<hex> line per produced .apk.'
+    value: ${{ steps.digests.outputs.digests }}
 
 runs:
   using: composite
@@ -256,6 +272,46 @@ runs:
       shell: bash
       run: mkdir -p melange-cache
 
+    - name: Generate the package signing key
+      id: signing_key
+      shell: bash
+      env:
+        MELANGE_BIN: ${{ steps.melange.outputs.path }}
+      run: |
+        set -euo pipefail
+        key_dir="$(mktemp -d "${RUNNER_TEMP}/melange-key.XXXXXX")"
+        (cd "$key_dir" && "$MELANGE_BIN" keygen melange-run.rsa >/dev/null)
+        echo "key=${key_dir}/melange-run.rsa" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare locked build environment
+      id: env_lock
+      if: inputs.env_lockfile != ''
+      shell: bash
+      env:
+        ENV_LOCKFILE: ${{ inputs.env_lockfile }}
+        APK_CACHE_DIR: ${{ inputs.apk_cache_dir }}
+        MELANGE_ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        lock="${GITHUB_WORKSPACE}/${ENV_LOCKFILE}"
+        if [ ! -f "$lock" ]; then
+          echo "::error::env_lockfile not found: $ENV_LOCKFILE" >&2
+          exit 1
+        fi
+        if [ -z "$APK_CACHE_DIR" ] || [ ! -d "$APK_CACHE_DIR" ]; then
+          echo "::error::env_lockfile $ENV_LOCKFILE needs the apk-cache artifact in apk_cache_dir" >&2
+          exit 1
+        fi
+        local_entries="$(jq -r --arg a "$MELANGE_ARCH" '[.contents.packages[] | select(.local == true and .architecture == $a) | .name] | join(", ")' "$lock")"
+        if [ -n "$local_entries" ]; then
+          echo "::error::$ENV_LOCKFILE locks local packages ($local_entries); a build environment can only use registry packages" >&2
+          exit 1
+        fi
+        cache="$(mktemp -d "${RUNNER_TEMP}/melange-apk-cache.XXXXXX")"
+        cp -R "$APK_CACHE_DIR"/. "$cache"/
+        echo "lock=$lock" >> "$GITHUB_OUTPUT"
+        echo "cache=$cache" >> "$GITHUB_OUTPUT"
+
     - name: Compute source metadata
       id: source_metadata
       shell: bash
@@ -282,6 +338,9 @@ runs:
         SOURCE_DATE: ${{ steps.source_metadata.outputs.date }}
         BUILD_ROOT: ${{ steps.build_root.outputs.build_root }}
         MELANGE_BIN: ${{ steps.melange.outputs.path }}
+        SIGNING_KEY: ${{ steps.signing_key.outputs.key }}
+        ENV_LOCK: ${{ steps.env_lock.outputs.lock }}
+        ENV_CACHE: ${{ steps.env_lock.outputs.cache }}
       run: |
         set -euo pipefail
         metadata_env="${RUNNER_TEMP}/melange-build.env"
@@ -310,10 +369,16 @@ runs:
           printf '%s\n' "$line" >> "$metadata_env"
         done <<< "$MELANGE_BUILD_ENV"
         echo "melange build environment keys: $(cut -d= -f1 "$metadata_env" | tr '\n' ' ')"
+        lock_args=()
+        if [ -n "$ENV_LOCK" ]; then
+          lock_args=(--env-lockfile "$ENV_LOCK" --offline --apk-cache-dir "$ENV_CACHE" --require-strong-checksums)
+        fi
         cd "$BUILD_ROOT"
         sudo env "PATH=$PATH" \
           "$MELANGE_BIN" build "$MELANGE_CONFIG" \
           --arch "$MELANGE_ARCH" \
+          --signing-key "$SIGNING_KEY" \
+          "${lock_args[@]+"${lock_args[@]}"}" \
           --out-dir "${GITHUB_WORKSPACE}/apk-packages" \
           --source-dir "${GITHUB_WORKSPACE}/${SOURCE_PATH}" \
           --cache-dir "${GITHUB_WORKSPACE}/melange-cache" \
@@ -340,10 +405,50 @@ runs:
         mkdir -p "apk-stage/${PACKAGE}"
         cp -R apk-packages/. "apk-stage/${PACKAGE}/"
 
+    - name: Record package digests
+      id: digests
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        MELANGE_ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        arch_dir="apk-packages/${MELANGE_ARCH}"
+        mkdir -p apk-digests
+        out="apk-digests/${PACKAGE}-${MELANGE_ARCH}.txt"
+        : > "$out"
+        tar -xzOf "${arch_dir}/APKINDEX.tar.gz" APKINDEX | awk -F: '/^P:/ {p=substr($0, 3)} /^V:/ {v=substr($0, 3)} /^$/ {if (p != "") print p "\t" v; p=""; v=""} END {if (p != "") print p "\t" v}' \
+          | while IFS=$'\t' read -r name version; do
+              file="${arch_dir}/${name}-${version}.apk"
+              if [ ! -f "$file" ]; then
+                echo "::error::APKINDEX lists ${name}-${version} but ${file} is missing" >&2
+                exit 1
+              fi
+              printf '%s=sha256:%s\n' "$name" "$(sha256sum "$file" | cut -d' ' -f1)" >> "$out"
+            done
+        if [ ! -s "$out" ]; then
+          echo "::error::no packages found in ${arch_dir}/APKINDEX.tar.gz" >&2
+          exit 1
+        fi
+        cat "$out"
+        {
+          echo "digests<<DIGESTS_EOF"
+          cat "$out"
+          echo "DIGESTS_EOF"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Upload APK artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: apks-${{ inputs.package }}-${{ inputs.arch }}
         path: apk-stage/
+        if-no-files-found: error
+        retention-days: 1
+
+    - name: Upload package digests
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: apk-digests-${{ inputs.package }}-${{ inputs.arch }}
+        path: apk-digests/
         if-no-files-found: error
         retention-days: 1

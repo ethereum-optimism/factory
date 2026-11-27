@@ -326,8 +326,6 @@ def validate_image($n; $pkgs):
             then error("image \($n): apko config smoke.verify_version must be boolean") else . end)
        | (if any($cfgs[]; .lockfile != "" and (.lockfile | lockfile_path_ok | not))
             then error("image \($n): apko lockfile must be a relative path without .. using [A-Za-z0-9._/-]") else . end)
-       | (if any($cfgs[]; .lockfile != "") and (.builders.apko.needs_packages | length) > 0
-            then error("image \($n): an apko lockfile with needs_packages is not supported yet; local packages need build-time digests") else . end)
        | (if any(.builders.apko.needs_packages[]; is_one_of(.; $pkgs) | not)
             then error("image \($n): needs_packages must name entries in packages") else . end))
     else . end
@@ -1034,7 +1032,8 @@ main() {
               cache_key_files: ($c.cache_key_files | join(",")),
               cargo_profile: (if $trusted then $c.cargo_profile.trusted else $c.cargo_profile.untrusted end),
               build_env: pkg_env(merge_args($hook; {}); $c.build_env),
-              build_version: (if $version != "" then $version else $c.build_version end)
+              build_version: (if $version != "" then $version else $c.build_version end),
+              env_lockfile: $c.env_lockfile
             } + (if $c.submodules == "false" then {} else {caller_submodules: $c.submodules} end)
               + (if $c.source != null and $c.source.root then {build_dir: $c.source.path} else {} end))
         ]) as $packages

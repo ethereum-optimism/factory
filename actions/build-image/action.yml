@@ -61,6 +61,10 @@ inputs:
     description: 'apko builder only, with lockfile: apko cache directory from the apk-cache artifact.'
     required: false
     default: ''
+  package_digests_dir:
+    description: 'apko builder only, with lockfile and repositories: directory of apk-digests files from the package legs. Each package the lock marks local is accepted only with one of these digests.'
+    required: false
+    default: ''
   importpath:
     description: 'docker builder only, ko mode: Go package to build, relative to the context.'
     required: false
@@ -212,6 +216,7 @@ runs:
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_LOCKFILE: ${{ inputs.lockfile }}
         APKO_CACHE_DIR: ${{ inputs.cache_dir }}
+        APKO_DIGESTS_DIR: ${{ inputs.package_digests_dir }}
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -233,10 +238,6 @@ runs:
         network=host
         mode_args=(--ignore-signatures)
         if [ -n "$APKO_LOCKFILE" ]; then
-          if [ -n "$APKO_REPOSITORIES" ]; then
-            echo "::error::lock file builds with local package repositories are not supported" >&2
-            exit 1
-          fi
           if [ -z "$APKO_CACHE_DIR" ] || [ ! -d "$APKO_CACHE_DIR" ]; then
             echo "::error::lockfile $APKO_LOCKFILE needs the apk-cache artifact in cache_dir" >&2
             exit 1
@@ -245,6 +246,12 @@ runs:
           cache_dir="$(cd "$APKO_CACHE_DIR" && pwd)"
           mounts+=(-v "${lock_path}:${lock_path}:ro" -v "${cache_dir}:${cache_dir}")
           mode_args=(--lockfile "$lock_path" --offline --cache-dir "$cache_dir" --require-strong-checksums)
+          local_packages="$("${GITHUB_ACTION_PATH}/local-packages.sh" "$lock_path" "$APKO_DIGESTS_DIR" amd64)"
+          while IFS= read -r accepted; do
+            if [ -n "$accepted" ]; then
+              mode_args+=(--local-package "$accepted")
+            fi
+          done <<< "$local_packages"
           network=none
         fi
 

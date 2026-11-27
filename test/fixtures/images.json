@@ -125,7 +125,8 @@
           "needs_packages": [
             "selftest-tool",
             "selftest-gotool"
-          ]
+          ],
+          "lockfile": "test/fixtures/apko/pkg.lock.json"
         }
       },
       "paths": [
@@ -189,7 +190,8 @@
       "config": "test/fixtures/melange/selftest-tool.yaml",
       "archs": [
         "x86_64"
-      ]
+      ],
+      "env_lockfile": "test/fixtures/melange/selftest-tool.lock.json"
     },
     "selftest-gotool": {
       "config": "test/fixtures/melange/selftest-gotool.yaml",

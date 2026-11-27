@@ -168,8 +168,9 @@ architecture.
 
 A `source` with `repository` set to the calling repository, `path` `"."`, and no `ref` is the calling repository checkout. It plans as an omitted `source`, and its `source_submodules` maps to `submodules`. Legacy v1 catalogs follow the same rule. A `source` with `path` `"."` for any other repository, or with a `ref` on the calling repository, is checked out under `.package-sources/<package>` with `root` set, so the checkout never replaces the calling repository's files. `root: false` with `path` `"."` is rejected.
 
-Package artifacts are named `apks-<package>-<arch>`. The package build uses no
-secrets and no OIDC token.
+Package artifacts are named `apks-<package>-<arch>`, and their digests
+`apk-digests-<package>-<arch>`. The package build uses no secrets and no OIDC
+token.
 
 ## Images and builders
 
@@ -432,8 +433,25 @@ An apko variant with a `lockfile` builds and publishes from the `apk-cache`
 artifact with `apko --lockfile --offline --cache-dir --require-strong-checksums`
 instead of resolving packages from the network: every package is checked
 against the sha256 in the lock, and keys come from the lock. Untrusted builds
-run apko in a container without network. A variant with a `lockfile` cannot
-use `needs_packages` yet; the plan rejects that combination.
+run apko in a container without network.
+
+A variant with both `lockfile` and `needs_packages` uses a lock written with
+`apko lock --mark-local-packages`, where the packages built in the run are
+`local: true` entries with name, version and architecture only. When the lock
+is written against a local repository signed with a key passed through
+`--keyring-append`, remove that keyring entry from the lock: builds accept
+local packages by digest, and a lock that embeds an unconfigured key is
+rejected. Each package
+leg uploads `apk-digests-<package>-<arch>` with one `<name>=sha256:<hex>` line
+per produced `.apk`, and apko accepts a local package only when its whole-file
+sha256 is one of those digests (`--local-package`). A local entry without a
+digest from this run fails the build.
+
+A package with an `env_lockfile` installs its melange build environment from
+the `apk-cache` artifact with `melange build --env-lockfile --offline
+--apk-cache-dir --require-strong-checksums`. An environment lock may not contain
+local packages. Every package leg signs its packages with a key generated for
+that leg and never stored.
 
 Example:
 

@@ -1860,6 +1860,7 @@ assert_json "$fetch" '.path_prefix' "/org/"
 assert_json "$fetch" '.identity' "abc/def"
 assert_json "$fetch" '.redirect_hosts | join(",")' "*.storage.example.net"
 assert_json "$fetch" '.archs | length' "0"
+assert_json "$(out_value "$OUT" packages_matrix)" '[.[].env_lockfile] | unique | join(",")' "melange/stack.lock.json"
 
 assert_json "$(out_value "$OUT" publish_matrix)" '[.[] | select(.image == "gadget") | .lockfile] | join(",")' "apko/gadget.lock.json,apko/gadget-dev.lock.json"
 assert_json "$(out_value "$OUT" publish_matrix)" '.[] | select(.image == "plain") | .lockfile' ""
@@ -1893,8 +1894,9 @@ write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "
 expect_plan_error lock_unknown_field unknown.json "apk_registry: unknown field allow" TRUSTED=true
 printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"images":{"x":{"builders":{"apko":{"lockfile":"a.lock.json","configs":[{"config":"apko/x.yaml"}]}}}}}' > both.json
 expect_plan_error lock_both_forms both.json "builders.apko.lockfile applies to the single config form" TRUSTED=true
-printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"packages":{"stack":{}},"images":{"x":{"builders":{"apko":{"lockfile":"apko/gadget.lock.json","needs_packages":["stack"]}}}}}' > local.json
-expect_plan_error lock_with_local_packages local.json "an apko lockfile with needs_packages is not supported yet" TRUSTED=true
+printf '%s' '{"version":2,"registry":"registry.example.invalid/images","apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"packages":{"stack":{}},"images":{"x":{"builders":{"apko":{"lockfile":"apko/gadget.lock.json","needs_packages":["stack"]}}}}}' > local.json
+run_plan lock_with_local_packages local.json TRUSTED=true
+assert_json "$(out_value "$OUT" publish_matrix)" '.[0].lockfile + " " + .[0].needs_packages' "apko/gadget.lock.json stack"
 
 popd >/dev/null
 

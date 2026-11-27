@@ -172,8 +172,8 @@ jobs:
 
   packages:
     name: packages (${{ matrix.package }}, ${{ matrix.arch }})
-    needs: plan
-    if: needs.plan.outputs.has_packages == 'true'
+    needs: [plan, fetch-apks]
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.has_packages == 'true' && (needs.fetch-apks.result == 'success' || needs.fetch-apks.result == 'skipped') }}
     strategy:
       fail-fast: true
       matrix:
@@ -223,6 +223,13 @@ jobs:
             exit 1
           fi
 
+      - name: Download APK cache
+        if: matrix.env_lockfile != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: apk-cache
+          path: ${{ runner.temp }}/apk-cache
+
       - name: Build package
         uses: ./.factory/actions/build-packages
         with:
@@ -242,6 +249,8 @@ jobs:
           cache_key_files: ${{ matrix.cache_key_files }}
           trusted: ${{ needs.plan.outputs.trusted }}
           free_disk: ${{ matrix.free_disk }}
+          env_lockfile: ${{ matrix.env_lockfile }}
+          apk_cache_dir: ${{ matrix.env_lockfile != '' && format('{0}/apk-cache', runner.temp) || '' }}
 
   build:
     name: build (${{ matrix.image }}, ${{ matrix.builder }})
@@ -302,6 +311,14 @@ jobs:
           name: apk-cache
           path: ${{ runner.temp }}/apk-cache
 
+      - name: Download package digests
+        if: matrix.lockfile != '' && matrix.needs_packages != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: apk-digests-*
+          path: ${{ runner.temp }}/apk-digests
+          merge-multiple: true
+
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -348,6 +365,7 @@ jobs:
           repositories: ${{ steps.stage.outputs.repositories }}
           lockfile: ${{ matrix.lockfile }}
           cache_dir: ${{ matrix.lockfile != '' && format('{0}/apk-cache', runner.temp) || '' }}
+          package_digests_dir: ${{ matrix.lockfile != '' && matrix.needs_packages != '' && format('{0}/apk-digests', runner.temp) || '' }}
           importpath: ${{ matrix.importpath }}
           ko_config: ${{ matrix.ko_config }}
           ldflags: ${{ matrix.ldflags }}
@@ -425,6 +443,14 @@ jobs:
           name: apk-cache
           path: ${{ runner.temp }}/apk-cache
 
+      - name: Download package digests
+        if: matrix.lockfile != '' && matrix.needs_packages != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: apk-digests-*
+          path: ${{ runner.temp }}/apk-digests
+          merge-multiple: true
+
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -482,6 +508,7 @@ jobs:
           repositories: ${{ steps.stage.outputs.repositories }}
           lockfile: ${{ matrix.lockfile }}
           cache_dir: ${{ matrix.lockfile != '' && format('{0}/apk-cache', runner.temp) || '' }}
+          package_digests_dir: ${{ matrix.lockfile != '' && matrix.needs_packages != '' && format('{0}/apk-digests', runner.temp) || '' }}
           arch: ${{ matrix.arch }}
           mode: ${{ matrix.mode }}
           context: ${{ matrix.context }}

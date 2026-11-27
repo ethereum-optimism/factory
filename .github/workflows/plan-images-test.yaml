@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - actions/build-packages/**
+      - actions/build-image/**
       - actions/fetch-apks/**
       - actions/plan-images/**
       - actions/fork-context/**
@@ -19,6 +20,7 @@ on:
       - main
     paths:
       - actions/build-packages/**
+      - actions/build-image/**
       - actions/fetch-apks/**
       - actions/plan-images/**
       - actions/fork-context/**
@@ -54,6 +56,9 @@ jobs:
 
       - name: Test publish-image bake overrides
         run: actions/publish-image/publish-image.test.sh
+
+      - name: Test build-image local package digests
+        run: actions/build-image/local-packages.test.sh
 
       - name: Test fetch-apks
         run: python3 -m unittest discover -s actions/fetch-apks -p 'test_*.py' -v
