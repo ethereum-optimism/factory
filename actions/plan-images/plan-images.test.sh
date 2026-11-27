@@ -1649,4 +1649,80 @@ grep -q 'slim variant config not found' "$TEST_DIR/guard-missing.log" || fail "m
 
 popd >/dev/null
 
+# --- Several versions under one repository, tag templates ----------------------------
+
+versioned="$TEST_DIR/versioned.json"
+cat > "$versioned" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "tag_template": "{version}-{date}-{sha12}",
+  "ref_tag_template": "{version}",
+  "images": {
+    "geth-v1-16": {
+      "repository": "group/geth",
+      "version": "v1.16",
+      "builders": {"docker": {"context": "geth/v1.16"}},
+      "smoke": {"commands": ["geth version"]}
+    },
+    "geth-v1-17": {
+      "repository": "group/geth",
+      "version": "v1.17",
+      "builders": {"apko": {"config": "geth/v1.17/apko.yaml"}},
+      "smoke": {"commands": ["geth version"]}
+    },
+    "plain": {
+      "builders": {"docker": {}},
+      "tag_template": "{sha}",
+      "ref_tag_template": "{ref}"
+    }
+  }
+}
+JSON
+DATED_TAG='^(.+)-[0-9]{8}-[0-9a-f]{12}$'
+
+run_plan versioned "$versioned" TRUSTED=true BUILD_DATE=20261127
+versioned_pub=$(matrix publish_matrix)
+assert_json "$versioned_pub" '[.[] | select(.image == "geth-v1-16") | .repository] | unique | join(",")' 'group/geth'
+assert_json "$versioned_pub" '[.[] | select(.image == "geth-v1-16") | .sha_tag] | unique | join(",")' 'v1.16-20261127-0123456789ab'
+assert_json "$versioned_pub" '[.[] | select(.image == "geth-v1-16") | .ref_tag] | unique | join(",")' 'v1.16'
+assert_json "$versioned_pub" '[.[] | select(.image == "geth-v1-17") | .repository, .sha_tag, .ref_tag] | join(",")' 'group/geth,v1.17-20261127-0123456789ab,v1.17'
+assert_json "$versioned_pub" '[.[] | select(.image == "plain") | .repository, .sha_tag, .ref_tag] | unique | join(",")' "$SHA,main,plain"
+assert_json "$(matrix manifest_matrix)" '[.[] | .image + "=" + .repository + ":" + .sha_tag] | sort | join(",")' \
+  "geth-v1-16=group/geth:v1.16-20261127-0123456789ab,plain=plain:$SHA"
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.image | startswith("geth")) | .repository] | unique | join(",")' 'group/geth'
+assert_json "$versioned_pub" "[.[] | select(.image | startswith(\"geth\")) | (.sha_tag | test(\"$DATED_TAG\"))] | all" 'true'
+assert_json "$versioned_pub" "[.[] | select(.image | startswith(\"geth\")) | (.sha_tag | capture(\"^(?<v>.+)-[0-9]{8}-[0-9a-f]{12}\$\").v)] | unique | join(\",\")" 'v1.16,v1.17'
+
+run_plan versioned_today "$versioned" TRUSTED=true
+today=$(date -u +%Y%m%d)
+assert_json "$(matrix publish_matrix)" '[.[] | select(.image == "geth-v1-17") | .sha_tag] | join(",")' "v1.17-$today-0123456789ab"
+
+run_plan versioned_untrusted "$versioned" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[].local_ref] | sort | join(",")' 'local/geth-v1-16-docker:smoke,local/geth-v1-17-apko:smoke,local/plain-docker:smoke'
+
+run_plan versioned_release "$versioned" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/plain/v2.0.0 \
+  GITHUB_REF_NAME=plain/v2.0.0 GITHUB_REF_TYPE=tag TRUSTED=true BUILD_DATE=20261127
+assert_json "$(matrix publish_matrix)" '[.[].ref_tag] | unique | join(",")' 'plain-v2.0.0'
+
+run_plan default_templates "$v2" TRUSTED=true BUILD_DATE=20261127
+assert_json "$(matrix publish_matrix)" '[.[] | .repository + ":" + .sha_tag] | unique | sort | join(",")' \
+  "gadget:$SHA,gadget:$SHA-dev,widget:$SHA"
+
+reject_versioned() {
+  jq "$2" "$versioned" > "$TEST_DIR/$1.json"
+  expect_plan_error "$1" "$TEST_DIR/$1.json" "$3" TRUSTED=true
+}
+
+reject_versioned shared_no_version 'del(.images["geth-v1-16"].version) | .images["geth-v1-16"].tag_template = "{sha}" | .images["geth-v1-16"].ref_tag_template = "{ref}"' 'so each must set version'
+reject_versioned shared_same_version '.images["geth-v1-17"].version = "v1.16"' 'so their versions must differ'
+reject_versioned shared_template '.images["geth-v1-17"].ref_tag_template = "{ref}"' 'must both contain {version}'
+reject_versioned shared_aliases '.default_branch_tags = ["latest"]' 'cannot publish default_branch_tags'
+reject_versioned template_no_sha '.images.plain.tag_template = "{ref}"' 'must contain {sha} or {sha12}'
+reject_versioned template_unknown '.images.plain.tag_template = "{branch}-{sha}"' 'may only contain letters, digits, dot, dash, and the placeholders'
+reject_versioned template_no_version '.images.plain.tag_template = "{version}-{sha}"' 'so the image must set version'
+reject_versioned bad_repository '.images.plain.repository = "Group/Plain"' 'repository must be a lowercase registry path'
+reject_versioned bad_version '.images.plain.version = "v1/2"' 'version may only contain'
+expect_plan_error bad_build_date "$versioned" 'BUILD_DATE must be YYYYMMDD' TRUSTED=true BUILD_DATE=2026-11-27
+
 echo "plan-images tests passed"

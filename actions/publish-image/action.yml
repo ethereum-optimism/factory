@@ -17,8 +17,12 @@ inputs:
     description: 'Registry prefix without trailing slash, for example us-docker.pkg.dev/project/repo.'
     required: true
   image:
-    description: 'Catalog image name.'
+    description: 'Catalog image name. Names the build cache scope, and the registry path when repository is empty.'
     required: true
+  repository:
+    description: 'Registry path under registry, for example group/name. Empty uses image.'
+    required: false
+    default: ''
   sha_tag:
     description: 'Tag for the commit SHA, including any builder prefix and variant suffix.'
     required: true
@@ -138,9 +142,9 @@ runs:
         APKO_SANDBOX: ${{ steps.sandbox.outputs.image }}
         APKO_BIN: ${{ steps.apko_bin.outputs.path }}
         APKO_CONFIG: ${{ inputs.config }}
-        APKO_TAG: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.sha_tag }}
-        APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.ref_tag }}
-        APKO_REPO: ${{ inputs.registry }}/${{ inputs.image }}
+        APKO_TAG: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}:${{ inputs.sha_tag }}
+        APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}:${{ inputs.ref_tag }}
+        APKO_REPO: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}
         APKO_ALIAS_TAGS: ${{ inputs.alias_tags }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
@@ -227,7 +231,7 @@ runs:
         KO_LDFLAGS: ${{ inputs.ldflags }}
         KO_ENV: ${{ inputs.env }}
         KO_ARCHS: ${{ inputs.archs }}
-        KO_REPO: ${{ inputs.registry }}/${{ inputs.image }}
+        KO_REPO: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}
         KO_SHA_TAG: ${{ inputs.sha_tag }}
         KO_REF_TAG: ${{ inputs.ref_tag }}
         KO_ALIAS_TAGS: ${{ inputs.alias_tags }}
@@ -296,7 +300,7 @@ runs:
         push: true
         cache-from: type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
         cache-to: type=gha,mode=max,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
-        outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image }},push=true
+        outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.repository || inputs.image }},push=true
 
     - name: Push architecture with docker bake
       id: bake
@@ -316,7 +320,7 @@ runs:
           *.attest=type=sbom
           *.cache-from=type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
           *.cache-to=type=gha,mode=max,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
-          *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.image }},push=true
+          *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.repository || inputs.image }},push=true
           ${{ inputs.set }}
 
     - name: Merge digests into manifest list
@@ -326,13 +330,14 @@ runs:
       env:
         REGISTRY: ${{ inputs.registry }}
         IMAGE: ${{ inputs.image }}
+        REPOSITORY: ${{ inputs.repository || inputs.image }}
         SHA_TAG: ${{ inputs.sha_tag }}
         REF_TAG: ${{ inputs.ref_tag }}
         ALIAS_TAGS: ${{ inputs.alias_tags }}
         DIGESTS_DIR: ${{ inputs.digests_dir }}
       run: |
         set -euo pipefail
-        name="${REGISTRY}/${IMAGE}"
+        name="${REGISTRY}/${REPOSITORY}"
         refs=()
         for digest_file in "$DIGESTS_DIR"/*.txt; do
           [ -f "$digest_file" ] || continue

@@ -79,6 +79,8 @@ the publish job completed.
 | `registry` | when publishing | Registry prefix, no trailing slash. Trusted runs fail when it is missing and there is something to publish. |
 | `tag_prefix` | no | Prefix on every published tag. Letters, digits, dot, dash. |
 | `default_branch_tags` | no | Alias tags, for example `latest`, published with the sha and ref tags on trusted default-branch runs. Letters, digits, dot, dash only. Default `[]`. See Default branch aliases. |
+| `tag_template` | no | Template for the commit tag. Default `{sha}`. See Tag templates. |
+| `ref_tag_template` | no | Template for the ref tag. Default `{ref}`. See Tag templates. |
 | `release` | no | Release tag mapping (see below). |
 | `shared_paths` | no | Changed-file patterns that plan every image and package. |
 | `packages` | no | Melange packages (see below). Names match `^[a-z0-9][a-z0-9._-]*$`. |
@@ -231,6 +233,12 @@ When an image has both builders, `primary` is required. Other image fields:
   arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
   `verify_version` (on release tags, a command must print the version).
 - `default_branch_tags`: overrides the top-level list for this image. An empty array publishes no alias tags for this image.
+- `repository`: registry path under `registry`, for example `group/name`.
+  Defaults to the image name. See Several versions in one repository.
+- `version`: label for the `{version}` tag placeholder, for example `v1.16`.
+  Letters, digits, dot, dash, starting with a letter or digit.
+- `tag_template`, `ref_tag_template`: override the top-level templates for this
+  image. See Tag templates.
 
 Resolution order for each builder's architectures: the builder's `archs`, then
 the image `archs`, then both architectures. Example: an image still built with
@@ -366,7 +374,7 @@ The full prefix is the top-level `tag_prefix` followed by that value. An
 apko-only image that must keep publishing `apko-<sha>` tags sets
 `builders.apko.tag_prefix` to `apko-`.
 
-Published tags for a prefix `P`:
+Published tags for a prefix `P`, with the default tag templates:
 
 - `P<commit sha>` and `P<sanitized ref>`. On release tags the sanitized ref is
   the rendered `publish_tag` (see Release tags).
@@ -376,6 +384,73 @@ Published tags for a prefix `P`:
   `<publish_tag>-slim`. With `release.publish_tag` `${version}`, `v1.2.3-slim`.
 - Docker images are pushed by digest per architecture, then merged into a
   manifest list under those tags.
+
+### Tag templates
+
+`tag_template` renders the commit tag and `ref_tag_template` renders the ref
+tag. Both are set at the top level and can be overridden per image. The
+defaults, `{sha}` and `{ref}`, publish the tags described above, so a catalog
+without these keys publishes the same tags as before.
+
+| Placeholder | Value |
+| --- | --- |
+| `{version}` | The image `version`. A template that uses it needs `version` on the image. |
+| `{date}` | UTC date of the plan job, `YYYYMMDD`. |
+| `{sha12}` | First 12 characters of the commit SHA. |
+| `{sha}` | Full commit SHA. |
+| `{ref}` | The sanitized ref name, or the rendered `publish_tag` on release tags. |
+
+Outside placeholders a template may contain letters, digits, dot, and dash.
+`tag_template` must contain `{sha}` or `{sha12}`, so every commit publishes its
+own tag. The builder prefix and the apko variant suffix are added around the
+rendered value as for the default tags, and every rendered tag must be a valid
+OCI tag (at most 128 characters).
+
+Example: `"tag_template": "{version}-{date}-{sha12}"` with `"version": "v1.16"`
+publishes tags such as `v1.16-20261127-0123456789ab`, which match
+`(.+)-\d{8}-[0-9a-f]{12}` with the version as the first group.
+
+### Several versions in one repository
+
+Several catalog entries can publish to one registry path by setting the same
+`repository`. Each entry is its own image in the catalog, with its own
+builders, paths, configuration directory, and smoke test. Because the entries
+share tags in one repository:
+
+- each entry must set `version`, and the versions must differ;
+- `tag_template` and `ref_tag_template` of each entry must contain `{version}`;
+- the entries cannot publish `default_branch_tags`; set
+  `"default_branch_tags": []` on each when the top level declares aliases.
+
+The planner fails the run when any of these does not hold.
+
+```json
+{
+  "version": 2,
+  "registry": "us-docker.pkg.dev/example-project/example-images",
+  "tag_template": "{version}-{date}-{sha12}",
+  "ref_tag_template": "{version}",
+  "images": {
+    "geth-v1-16": {
+      "repository": "example/geth",
+      "version": "v1.16",
+      "builders": {"apko": {"config": "geth/v1.16/apko.yaml"}},
+      "paths": ["geth/v1.16/**"]
+    },
+    "geth-v1-17": {
+      "repository": "example/geth",
+      "version": "v1.17",
+      "builders": {"apko": {"config": "geth/v1.17/apko.yaml"}},
+      "paths": ["geth/v1.17/**"]
+    }
+  }
+}
+```
+
+Both entries publish to `example/geth`. A main commit publishes
+`v1.16-<date>-<sha12>` and `v1.17-<date>-<sha12>`, and moves the `v1.16` and
+`v1.17` ref tags. Release tags still name the catalog entry, for example
+`geth-v1-17/v1.17.2`.
 
 ### Default branch aliases
 
@@ -416,7 +491,7 @@ Trusted runs:
 - smoke test every architecture of the pushed digest (amd64 on the standard
   runner, arm64 on the arm runner), pulling by digest.
 
-A ko image publishes `<registry>/<image>` with no path suffix, under the
+A ko image publishes `<registry>/<repository>` with no path suffix, under the
 `<sha_tag>` and `<ref_tag>` tags.
 
 ## Legacy catalogs
@@ -456,7 +531,7 @@ prefix.
 ## Tests
 
 `actions/plan-images/plan-images.test.sh` covers normalization, validation,
-tag and runner selection, legacy merging, hooks, notices, and change detection.
+tag templates, shared repositories, tag and runner selection, legacy merging, hooks, notices, and change detection.
 `scripts/lint-untrusted-permissions.test.sh` runs the lint against the real
 files and against planted violations. Both run in the factory self-test
 workflows.

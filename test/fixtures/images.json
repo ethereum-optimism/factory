@@ -113,6 +113,52 @@
         "commands": [],
         "script": "test/fixtures/smoke/check-selftest-tool.sh"
       }
+    },
+    "selftest-versioned-v1": {
+      "repository": "selftest-versioned",
+      "version": "v1",
+      "tag_template": "{version}-{date}-{sha12}",
+      "ref_tag_template": "{version}",
+      "builders": {
+        "docker": {
+          "context": "test/fixtures/docker",
+          "dockerfile": "Dockerfile",
+          "archs": [
+            "amd64"
+          ]
+        }
+      },
+      "paths": [
+        "test/fixtures/docker/**"
+      ],
+      "smoke": {
+        "commands": [
+          "/bin/sh -c true"
+        ]
+      }
+    },
+    "selftest-versioned-v2": {
+      "repository": "selftest-versioned",
+      "version": "v2",
+      "tag_template": "{version}-{date}-{sha12}",
+      "ref_tag_template": "{version}",
+      "builders": {
+        "docker": {
+          "context": "test/fixtures/docker",
+          "dockerfile": "Dockerfile",
+          "archs": [
+            "amd64"
+          ]
+        }
+      },
+      "paths": [
+        "test/fixtures/docker/**"
+      ],
+      "smoke": {
+        "commands": [
+          "/bin/sh -c true"
+        ]
+      }
     }
   },
   "packages": {

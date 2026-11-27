@@ -26,6 +26,16 @@
       "$ref": "#/$defs/tag_names",
       "description": "Alias tags (for example latest) published with the sha and ref tags on trusted default-branch runs. Not published on release tags, pull requests, or other branches. Each builder applies its own tag prefix. An image can override this list with its own default_branch_tags."
     },
+    "tag_template": {
+      "type": "string",
+      "pattern": "^([a-zA-Z0-9.-]|\\{(version|date|sha12|sha|ref)\\})+$",
+      "description": "Template for the commit tag. Placeholders: {version} (the image version), {date} (UTC date of the plan, YYYYMMDD), {sha12} (first 12 characters of the commit SHA), {sha} (full commit SHA), {ref} (sanitized ref name, or the rendered release publish_tag on release tags). Must contain {sha} or {sha12}. Defaults to {sha}. Builder prefixes and variant suffixes are added around the rendered value. An image can override it with its own tag_template."
+    },
+    "ref_tag_template": {
+      "type": "string",
+      "pattern": "^([a-zA-Z0-9.-]|\\{(version|date|sha12|sha|ref)\\})+$",
+      "description": "Template for the ref tag. Same placeholders as tag_template. Defaults to {ref}. Builder prefixes and variant suffixes are added around the rendered value. An image can override it with its own ref_tag_template."
+    },
     "release": {
       "type": "object",
       "additionalProperties": false,
@@ -220,6 +230,26 @@
             "apko"
           ],
           "description": "Builder that gets the canonical tags. Required when both builders are set. The other builder's tags are prefixed with its name and a dash."
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$",
+          "description": "Registry path under registry, for example group/name. Defaults to the image name. Images that share a repository must each set a distinct version, use tag templates that contain {version} for both tags, and publish no default_branch_tags."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+          "description": "Version label for the {version} tag placeholder, for example v1.16. Required when a tag template of the image uses {version}."
+        },
+        "tag_template": {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9.-]|\\{(version|date|sha12|sha|ref)\\})+$",
+          "description": "Overrides the top-level tag_template for this image."
+        },
+        "ref_tag_template": {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9.-]|\\{(version|date|sha12|sha|ref)\\})+$",
+          "description": "Overrides the top-level ref_tag_template for this image."
         },
         "archs": {
           "type": "array",
