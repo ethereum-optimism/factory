@@ -547,11 +547,97 @@ push_change untrusted-widget widget/b.txt false
 assert_eq "$(out_value "$OUT" selected_images)" "widget" "untrusted push change selects widget only"
 
 push_change trusted-widget widget/b.txt true
-assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push plans every image"
+assert_eq "$(out_value "$OUT" selected_images)" "widget" "default branch push plans only the changed image"
 assert_json "$(matrix build_matrix)" 'length' '0'
+assert_json "$(matrix publish_matrix)" '[.[].image] | unique | join(",")' 'widget'
+assert_json "$(matrix packages_matrix)" 'length' '0'
+
+push_change trusted-gadget gadget/b.txt true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget" "default branch push plans the changed apko image"
+assert_json "$(matrix packages_matrix)" '[.[].package] | join(",")' 'stack'
+assert_json "$(matrix publish_matrix)" '[.[].image] | unique | join(",")' 'gadget'
+
+push_change trusted-package melange/stack.yaml true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget" "default branch push of a package plans its images"
+
+push_change trusted-shared go.mod true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push of a shared path plans every image"
+
+push_change trusted-catalog .github/images.json true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push of the catalog plans every image"
 
 push_change trusted-unrelated docs/readme.md true
-assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "default branch push with unrelated change plans every image"
+assert_eq "$(out_value "$OUT" selected_images)" "" "default branch push with an unrelated change plans nothing"
+assert_eq "$(out_value "$OUT" has_publish)" "false" "unrelated default branch push publishes nothing"
+
+# A push whose before SHA is all zeros has no base: the full catalog is planned.
+printf '\n' >> "$repo/widget/b.txt"
+git -C "$repo" add -A
+git -C "$repo" commit -q -m new-branch
+zero_head=$(git -C "$repo" rev-parse HEAD)
+printf '{"before":"%s","after":"%s"}' "0000000000000000000000000000000000000000" "$zero_head" > "$TEST_DIR/event-push-zero.json"
+pushd "$repo" >/dev/null
+run_plan push-zero .github/images.json GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch GITHUB_SHA="$zero_head" \
+  GITHUB_EVENT_PATH="$TEST_DIR/event-push-zero.json" TRUSTED=true
+popd >/dev/null
+git -C "$repo" reset -q --hard "$base_sha"
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "a push without a base plans every image"
+grep -q 'Could not compute the changed files' "$TEST_DIR/push-zero.log" || fail "push without a base: missing fallback warning"
+
+# A push whose before SHA is not in the repository falls back to the full catalog.
+printf '{"before":"%s","after":"%s"}' "1111111111111111111111111111111111111111" "$base_sha" > "$TEST_DIR/event-push-missing.json"
+pushd "$repo" >/dev/null
+run_plan push-missing .github/images.json GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch GITHUB_SHA="$base_sha" \
+  GITHUB_EVENT_PATH="$TEST_DIR/event-push-missing.json" TRUSTED=true
+popd >/dev/null
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "a push with an unknown base plans every image"
+
+# Schedules and dispatches without a target rebuild the full catalog.
+pushd "$repo" >/dev/null
+run_plan schedule-full .github/images.json GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch GITHUB_SHA="$base_sha" TRUSTED=true
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "schedule plans every image"
+run_plan dispatch-full .github/images.json GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main \
+  GITHUB_REF_NAME=main GITHUB_REF_TYPE=branch GITHUB_SHA="$base_sha" TRUSTED=true TARGET=
+assert_eq "$(out_value "$OUT" selected_images)" "gadget,widget" "dispatch without a target plans every image"
+popd >/dev/null
+
+# --- Dispatch target ------------------------------------------------------------------
+
+run_plan target_widget "$v2" TRUSTED=true TARGET=widget
+assert_eq "$(out_value "$OUT" selected_images)" "widget" "target plans only the named image"
+assert_json "$(matrix packages_matrix)" 'length' '0'
+assert_json "$(matrix publish_matrix)" '[.[].image] | unique | join(",")' 'widget'
+
+run_plan target_gadget "$v2" TRUSTED=true TARGET=gadget
+assert_eq "$(out_value "$OUT" selected_images)" "gadget" "target plans the named apko image"
+assert_eq "$(out_value "$OUT" selected_packages)" "stack" "target plans the packages of the image"
+
+run_plan target_untrusted "$v2" TRUSTED=false TARGET=widget GITHUB_REF=refs/heads/feature GITHUB_REF_NAME=feature
+assert_eq "$(out_value "$OUT" selected_images)" "widget" "untrusted dispatch target plans only the named image"
+assert_json "$(matrix build_matrix)" '[.[].image] | unique | join(",")' 'widget'
+assert_json "$(matrix publish_matrix)" 'length' '0'
+
+target_reject() {
+  local name="$1" target="$2" msg="$3"
+  shift 3
+  OUT="$TEST_DIR/$name.out"
+  : > "$OUT"
+  if env -i PATH="$PATH" HOME="${HOME:-/tmp}" GITHUB_OUTPUT="$OUT" "${DEFAULT_ENV[@]}" TRUSTED=true TARGET="$target" "$@" \
+      bash "$PLAN" "$v2" > "$TEST_DIR/$name.log" 2>&1; then
+    fail "planner accepted $name"
+  fi
+  grep -q -- "$msg" "$TEST_DIR/$name.log" || fail "$name: missing error '$msg'"
+  [[ -s "$OUT" ]] && fail "$name: planner emitted outputs"
+  return 0
+}
+target_reject target_unknown nope "is not an image in the catalog"
+target_reject target_bad_name '../widget' "is not an image in the catalog"
+target_reject target_on_push widget "applies only to workflow_dispatch" GITHUB_EVENT_NAME=push
+target_reject target_on_tag widget "does not apply to runs on a tag ref" GITHUB_REF=refs/tags/widget/v1.2.3 \
+  GITHUB_REF_NAME=widget/v1.2.3 GITHUB_REF_TYPE=tag
 
 # --- Release ref tag matches the legacy sanitized ref name ----------------------
 

@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: '.github/images.json'
+      target:
+        description: 'Catalog image name to build alone on a workflow_dispatch run. Empty builds the full catalog on dispatch.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   plan:
@@ -95,6 +100,7 @@ jobs:
         with:
           config: ${{ inputs.config }}
           trusted: ${{ steps.trust.outputs.trusted }}
+          target: ${{ inputs.target }}
 
   fetch-apks:
     name: fetch-apks
