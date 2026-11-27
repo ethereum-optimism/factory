@@ -96,7 +96,7 @@
         "host",
         "path_prefix"
       ],
-      "description": "APK registry for lock file builds. When set, the fetch-apks job downloads every package and index pinned by the planned lockfile and env_lockfile entries, and refuses any URL that is not https on host under path_prefix and any package without a whole-file sha256.",
+      "description": "APK registry for lock file builds. When set, the fetch-apks job downloads every package and index pinned by the planned lockfile and env_lockfile entries, and refuses any URL that is not https on host under path_prefix and any package without a whole-file sha256. The planner also fails unless every apko and melange repository and every locked URL in the catalog is on this allowlist.",
       "properties": {
         "host": {
           "type": "string",

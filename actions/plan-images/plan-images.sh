@@ -918,9 +918,87 @@ check_slim_variants() {
   fi
 }
 
+# Fails unless every repository and locked URL an opted-in catalog can reach
+# is https on apk_registry.host under apk_registry.path_prefix.
+check_apk_registry() {
+  local host prefix failures=() cfg lock kind line
+  if ! jq -e '.apk_registry != null' "$MODEL" >/dev/null; then
+    return 0
+  fi
+  host=$(jq -r '.apk_registry.host' "$MODEL")
+  prefix=$(jq -r '.apk_registry.path_prefix' "$MODEL")
+  local url_filter
+  read -r -d '' url_filter <<'JQ' || true
+    def allowed: test("^https://[^/]+/") and (sub("^https://"; "") | split("/")[0] == $host)
+      and ((sub("^https://[^/]+"; "") + "/") | startswith($prefix))
+      and (test("[?#\\\\]|%2[eEfF]|%5[cC]|/\\.\\.?(/|$)|^https://[^/]*[@:]") | not);
+    def remote: test("^[A-Za-z][A-Za-z0-9+.-]*://");
+    def entry: if startswith("@") then (sub("^@[^ ]+ +"; "")) else . end;
+JQ
+
+  while IFS=$'\t' read -r kind cfg; do
+    [[ -n "$cfg" ]] || continue
+    if [[ ! -f "$cfg" ]]; then
+      failures+=("$kind $cfg: not found in the checkout, so its repositories cannot be checked")
+      continue
+    fi
+    if ! yq -o=json '.' "$cfg" > "$WORK/registry-check.json" 2>/dev/null; then
+      failures+=("$kind $cfg: not valid YAML")
+      continue
+    fi
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && failures+=("$kind $cfg: $line")
+    done < <(jq -r --arg host "$host" --arg prefix "$prefix" --arg kind "$kind" "$url_filter"'
+      (if $kind == "apko config" then
+         (if has("include") then "include is not allowed with apk_registry" else empty end),
+         ((.contents.repositories // []) + (.contents.build_repositories // [])
+           | .[] | select(type == "string") | entry as $e
+           | select(($e | remote | not) and ($e | startswith("/") | not) and ($e | startswith(".") | not)) | "repository \(.) is neither a URL nor a local path"),
+         ((.contents.repositories // []) + (.contents.build_repositories // [])
+           | .[] | select(type == "string") | entry | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist")
+       else
+         ([.environment.contents.repositories // [], .test.environment.contents.repositories // [],
+           (.subpackages // [] | .[] | .test.environment.contents.repositories // [])] | add
+           | .[] | select(type == "string") | entry | select(remote and (allowed | not))
+           | "environment repository \(.) is not on the apk_registry allowlist")
+       end)' "$WORK/registry-check.json")
+  done < <(jq -r '
+      (.images[] | (.builders.apko.configs // [])[] | ["apko config", .config]),
+      (.packages | to_entries[] | ["melange config", (if .value.source != null and .value.source.root then (.value.source.path + "/" + .value.config) else .value.config end)])
+      | @tsv' "$MODEL" | sort -u)
+
+  while IFS= read -r lock; do
+    [[ -n "$lock" ]] || continue
+    if [[ ! -f "$lock" ]]; then
+      failures+=("lock file $lock: not found")
+      continue
+    fi
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && failures+=("lock file $lock: $line")
+    done < <(jq -r --arg host "$host" --arg prefix "$prefix" "$url_filter"'
+      (if .unverified_indexes == true then "resolved from unverified repository indexes" else empty end),
+      (.contents.packages // [] | .[] | select(.local != true)
+        | if ((.url // "") | allowed | not) then "package \(.name) url \(.url // "<none>") is not on the apk_registry allowlist"
+          elif ((.sha256 // "") | test("^sha256:[0-9a-f]{64}$") | not) then "package \(.name) has no whole-file sha256"
+          else empty end),
+      ([.contents.repositories // [], .contents.build_repositories // [], .contents.runtime_repositories // []] | add
+        | .[] | (.url // "") | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist")' "$lock" 2>/dev/null || echo "not valid JSON")
+  done < <(jq -r '((.images[] | (.builders.apko.configs // [])[] | .lockfile), (.packages[] | .env_lockfile)) | select(. != "")' "$MODEL" | sort -u)
+
+  if [[ ${#failures[@]} -gt 0 ]]; then
+    echo "::error::apk_registry allows only https://${host}${prefix}; ${#failures[@]} violation(s):" >&2
+    for line in "${failures[@]}"; do
+      echo "::error::$line" >&2
+    done
+    exit 1
+  fi
+  echo "apk_registry: every repository and locked URL is under https://${host}${prefix}"
+}
+
 main() {
   normalize_catalog
   check_slim_variants
+  check_apk_registry
   local hook_kv
   hook_kv=$(run_hook)
 
