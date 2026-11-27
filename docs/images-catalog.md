@@ -416,6 +416,9 @@ not only the planned images. The plan fails, listing every violation, unless:
   an https URL on `host` under `path_prefix`, and no apko config uses `include`;
 - every repository of every melange config's build environment, main test
   environment, and subpackage test environments is a local path or such a URL;
+- every apko config sets `lockfile`;
+- every keyring URL of every apko config, melange build and test
+  environment, and lock file is such a URL (local key paths are allowed);
 - every lock file and environment lock file exists, is not marked
   `unverified_indexes`, pins every non-local package to such a URL with a
   whole-file `sha256`, and lists only such remote repositories.
@@ -444,7 +447,10 @@ The job fails, listing every problem, when:
   off `host` to a host that `redirect_hosts` does not name, or redirected twice.
 
 Local packages (`local: true`) are skipped. Untrusted runs fetch `x86_64`
-entries only. The plan fails when a lock file is missing from the checkout.
+entries only. When `chainguard_identity` is set and a pull request
+runs without an OIDC token (from a fork, or opened by Dependabot), the planner
+skips the apko builders with lock files and the packages with environment lock
+files, with a notice for each, and plans the rest. The plan fails when a lock file is missing from the checkout.
 
 An apko variant with a `lockfile` builds and publishes from the `apk-cache`
 artifact with `apko --lockfile --offline --cache-dir --require-strong-checksums`

@@ -1819,6 +1819,7 @@ pushd "$lock_dir" >/dev/null
 echo '{}' > apko/gadget.lock.json
 echo '{}' > apko/gadget-dev.lock.json
 echo '{}' > melange/stack.lock.json
+echo '{}' > apko/plain.lock.json
 for cfg in apko/gadget.yaml apko/gadget-dev.yaml apko/plain.yaml apko/x.yaml; do
   printf 'contents:\n  repositories:\n    - https://apk.example.dev/org\n  packages:\n    - base\n' > "$cfg"
 done
@@ -1846,7 +1847,7 @@ write_lock_catalog() {
       }
     },
     "plain": {
-      "builders": {"apko": {"config": "apko/plain.yaml"}}
+      "builders": {"apko": {"config": "apko/plain.yaml", "lockfile": "apko/plain.lock.json"}}
     }
   }
 }
@@ -1858,7 +1859,7 @@ write_lock_catalog "$registry_block" apko/gadget.lock.json lock.json
 run_plan lock_trusted lock.json TRUSTED=true
 assert_eq "$(out_value "$OUT" has_apk_fetch)" "true" "has_apk_fetch on a lock catalog"
 fetch=$(out_value "$OUT" apk_fetch)
-assert_json "$fetch" '.lockfiles | join(",")' "apko/gadget-dev.lock.json,apko/gadget.lock.json,melange/stack.lock.json"
+assert_json "$fetch" '.lockfiles | join(",")' "apko/gadget-dev.lock.json,apko/gadget.lock.json,apko/plain.lock.json,melange/stack.lock.json"
 assert_json "$fetch" '.host' "apk.example.dev"
 assert_json "$fetch" '.path_prefix' "/org/"
 assert_json "$fetch" '.identity' "abc/def"
@@ -1867,7 +1868,7 @@ assert_json "$fetch" '.archs | length' "0"
 assert_json "$(out_value "$OUT" packages_matrix)" '[.[].env_lockfile] | unique | join(",")' "melange/stack.lock.json"
 
 assert_json "$(out_value "$OUT" publish_matrix)" '[.[] | select(.image == "gadget") | .lockfile] | join(",")' "apko/gadget.lock.json,apko/gadget-dev.lock.json"
-assert_json "$(out_value "$OUT" publish_matrix)" '.[] | select(.image == "plain") | .lockfile' ""
+assert_json "$(out_value "$OUT" publish_matrix)" '.[] | select(.image == "plain") | .lockfile' "apko/plain.lock.json"
 
 run_plan lock_untrusted lock.json TRUSTED=false
 assert_json "$(out_value "$OUT" apk_fetch)" '.archs | join(",")' "x86_64"
@@ -1942,6 +1943,40 @@ expect_enforce_error enforce_lock_sha "package base has no whole-file sha256" se
 expect_enforce_error enforce_lock_repo "repository https://packages.wolfi.dev/os/x86_64/APKINDEX.tar.gz is not on the apk_registry allowlist" set_lock '.contents.repositories[0].url = "https://packages.wolfi.dev/os/x86_64/APKINDEX.tar.gz"'
 expect_enforce_error enforce_lock_unverified "resolved from unverified repository indexes" set_lock '.unverified_indexes = true'
 expect_enforce_error enforce_missing_config "apko config apko/gadget.yaml: not found in the checkout" rm apko/gadget.yaml
+
+set_keyring() { printf 'contents:\n  repositories:\n    - https://apk.example.dev/org\n  keyring:\n    - %s\n' "$1" > apko/gadget.yaml; }
+set_env_keyring() { printf 'environment:\n  contents:\n    repositories:\n      - https://apk.example.dev/org\n    keyring:\n      - %s\n' "$1" > melange/stack.yaml; }
+expect_enforce_error enforce_keyring "keyring https://packages.wolfi.dev/os/wolfi-signing.rsa.pub is not on the apk_registry allowlist" set_keyring https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+expect_enforce_error enforce_env_keyring "environment keyring https://evil.example.net/org/key.rsa.pub is not on the apk_registry allowlist" set_env_keyring https://evil.example.net/org/key.rsa.pub
+expect_enforce_error enforce_lock_keyring "keyring https://evil.example.net/key.rsa.pub is not on the apk_registry allowlist" set_lock '.contents.keyring = [{"name":"k","url":"https://evil.example.net/key.rsa.pub","content":"x"}]'
+set_keyring ./keys/local.rsa.pub
+run_plan enforce_local_keyring enforce.json TRUSTED=true
+printf 'contents:\n  repositories:\n    - https://apk.example.dev/org\n  packages:\n    - base\n' > apko/gadget.yaml
+
+jq '.images.plain.builders.apko |= del(.lockfile)' enforce.json > no-lockfile.json
+expect_plan_error enforce_no_lockfile no-lockfile.json "image plain: apko config apko/plain.yaml has no lockfile" TRUSTED=true
+
+jq '.images.box = {"builders": {"docker": {}}}' enforce.json > oidc.json
+jq '.images.box = {"builders": {"docker": {}}}' anon.json > oidc-anon.json
+printf '%s' '{"pull_request":{"head":{"repo":{"full_name":"someone/fork"}},"base":{"repo":{"full_name":"org/repo"}}}}' > fork-event.json
+printf '%s' '{"pull_request":{"head":{"repo":{"full_name":"org/repo"}},"base":{"repo":{"full_name":"org/repo"}}}}' > same-event.json
+oidc_env=(GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge GITHUB_REF_NAME=1/merge GITHUB_REF_TYPE=branch TRUSTED=false)
+
+run_plan oidc_fork oidc.json "${oidc_env[@]}" GITHUB_EVENT_PATH="$lock_dir/fork-event.json"
+assert_json "$(out_value "$OUT" build_matrix)" '[.[].image] | join(",")' "box"
+assert_json "$(out_value "$OUT" packages_matrix)" 'length' "0"
+assert_eq "$(out_value "$OUT" has_apk_fetch)" "false" "fork run fetches nothing"
+grep -q 'Image gadget builder apko needs the authenticated APK registry' "$TEST_DIR/oidc_fork.log" || fail "fork skip notice for gadget missing"
+grep -q 'Package stack needs the authenticated APK registry' "$TEST_DIR/oidc_fork.log" || fail "fork skip notice for stack missing"
+
+run_plan oidc_dependabot oidc.json "${oidc_env[@]}" GITHUB_EVENT_PATH="$lock_dir/same-event.json" GITHUB_ACTOR='dependabot[bot]'
+assert_json "$(out_value "$OUT" build_matrix)" '[.[].image] | join(",")' "box"
+
+run_plan oidc_same_repo oidc.json "${oidc_env[@]}" GITHUB_EVENT_PATH="$lock_dir/same-event.json"
+assert_json "$(out_value "$OUT" build_matrix)" '[.[].image] | sort | join(",")' "box,gadget,gadget,plain"
+
+run_plan oidc_anonymous oidc-anon.json "${oidc_env[@]}" GITHUB_EVENT_PATH="$lock_dir/fork-event.json"
+assert_json "$(out_value "$OUT" build_matrix)" '[.[].image] | sort | join(",")' "box,gadget,gadget,plain"
 
 set_repo https://packages.wolfi.dev/os
 set_env_repo https://packages.wolfi.dev/os

@@ -88,7 +88,8 @@
           ]
         },
         "apko": {
-          "config": "test/fixtures/apko/tiny.yaml"
+          "config": "test/fixtures/apko/tiny.yaml",
+          "lockfile": "test/fixtures/apko/tiny.lock.json"
         }
       },
       "primary": "docker",
