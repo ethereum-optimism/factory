@@ -53,6 +53,14 @@ inputs:
     description: 'apko builder only: comma-separated APK repository directories from stage-packages.'
     required: false
     default: ''
+  lockfile:
+    description: 'apko builder only: apko lock file, relative to the repository root. When set, apko builds offline from cache_dir with --lockfile and --require-strong-checksums, in a container without network.'
+    required: false
+    default: ''
+  cache_dir:
+    description: 'apko builder only, with lockfile: apko cache directory from the apk-cache artifact.'
+    required: false
+    default: ''
   importpath:
     description: 'docker builder only, ko mode: Go package to build, relative to the context.'
     required: false
@@ -202,6 +210,8 @@ runs:
         APKO_CONFIG: ${{ inputs.config }}
         APKO_TAG: ${{ inputs.local_ref }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
+        APKO_LOCKFILE: ${{ inputs.lockfile }}
+        APKO_CACHE_DIR: ${{ inputs.cache_dir }}
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -220,13 +230,31 @@ runs:
           repo_args=(-r "$APKO_REPOSITORIES")
         fi
 
-        docker run --rm --network host \
+        network=host
+        mode_args=(--ignore-signatures)
+        if [ -n "$APKO_LOCKFILE" ]; then
+          if [ -n "$APKO_REPOSITORIES" ]; then
+            echo "::error::lock file builds with local package repositories are not supported" >&2
+            exit 1
+          fi
+          if [ -z "$APKO_CACHE_DIR" ] || [ ! -d "$APKO_CACHE_DIR" ]; then
+            echo "::error::lockfile $APKO_LOCKFILE needs the apk-cache artifact in cache_dir" >&2
+            exit 1
+          fi
+          lock_path="$(cd "$(dirname "${GITHUB_WORKSPACE}/${APKO_LOCKFILE}")" && pwd)/$(basename "$APKO_LOCKFILE")"
+          cache_dir="$(cd "$APKO_CACHE_DIR" && pwd)"
+          mounts+=(-v "${lock_path}:${lock_path}:ro" -v "${cache_dir}:${cache_dir}")
+          mode_args=(--lockfile "$lock_path" --offline --cache-dir "$cache_dir" --require-strong-checksums)
+          network=none
+        fi
+
+        docker run --rm --network "$network" \
           --entrypoint /usr/bin/apko \
           --workdir "$out_dir" \
           "${mounts[@]}" \
           "$APKO_SANDBOX" \
           build \
-          --ignore-signatures \
+          "${mode_args[@]}" \
           --arch amd64 \
           "${repo_args[@]+"${repo_args[@]}"}" \
           "${config_dir}/${config_file}" "$APKO_TAG" "${out_dir}/image.tar"
