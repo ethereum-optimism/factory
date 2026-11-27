@@ -25,6 +25,7 @@ awk '
 
 sed \
   -e 's|\${{ inputs.arch }}|amd64|g' \
+  -e 's/\${{ inputs.repository || inputs.image }}/selftest-bake/g' \
   -e 's|\${{ inputs.image }}|selftest-bake|g' \
   -e 's|\${{ inputs.registry }}|registry.invalid/selftest|g' \
   -e '/^\${{ inputs.set }}$/d' \

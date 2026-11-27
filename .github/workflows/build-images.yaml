@@ -374,6 +374,7 @@ jobs:
           kind: ${{ matrix.kind }}
           registry: ${{ matrix.registry }}
           image: ${{ matrix.image }}
+          repository: ${{ matrix.repository }}
           sha_tag: ${{ matrix.sha_tag }}
           ref_tag: ${{ matrix.ref_tag }}
           alias_tags: ${{ matrix.alias_tags }}
@@ -398,7 +399,7 @@ jobs:
         if: matrix.kind == 'apko' || matrix.kind == 'ko'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ matrix.registry }}/${{ matrix.image }}
+          subject-name: ${{ matrix.registry }}/${{ matrix.repository }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
           show-summary: false
@@ -497,6 +498,7 @@ jobs:
           kind: docker-manifest
           registry: ${{ matrix.registry }}
           image: ${{ matrix.image }}
+          repository: ${{ matrix.repository }}
           sha_tag: ${{ matrix.sha_tag }}
           ref_tag: ${{ matrix.ref_tag }}
           alias_tags: ${{ matrix.alias_tags }}
@@ -506,7 +508,7 @@ jobs:
       - name: Attest manifest provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ matrix.registry }}/${{ matrix.image }}
+          subject-name: ${{ matrix.registry }}/${{ matrix.repository }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
           show-summary: false
@@ -607,7 +609,7 @@ jobs:
       - name: Smoke test pushed digest
         uses: ./.factory/actions/smoke-test
         with:
-          image: ${{ matrix.registry }}/${{ matrix.image }}@${{ steps.digest.outputs.digest }}
+          image: ${{ matrix.registry }}/${{ matrix.repository }}@${{ steps.digest.outputs.digest }}
           arch: ${{ matrix.arch }}
           pull: true
           commands: ${{ matrix.smoke_commands }}

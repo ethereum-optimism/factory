@@ -12,6 +12,8 @@
 #   TRUSTED             "true" or "false" from actions/fork-context (required)
 #   LEGACY_APKO_CONFIG  legacy apko catalog path (optional)
 #   GITHUB_OUTPUT       file that receives the outputs (required)
+#   BUILD_DATE          UTC date for the {date} tag placeholder, YYYYMMDD
+#                       (optional, defaults to the current UTC date)
 #   GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_REF, GITHUB_REF_NAME,
 #   GITHUB_REF_TYPE, GITHUB_SHA are provided by Actions.
 set -euo pipefail
@@ -34,6 +36,11 @@ EVENT_PATH="${GITHUB_EVENT_PATH:-}"
 REF_TYPE="${GITHUB_REF_TYPE:-}"
 REF_NAME="${GITHUB_REF_NAME:-}"
 HEAD_SHA="${GITHUB_SHA:-HEAD}"
+BUILD_DATE="${BUILD_DATE:-$(date -u +%Y%m%d)}"
+if [[ ! "$BUILD_DATE" =~ ^[0-9]{8}$ ]]; then
+  echo "::error::BUILD_DATE must be YYYYMMDD" >&2
+  exit 1
+fi
 if [[ -z "$REF_TYPE" && -n "${GITHUB_REF:-}" ]]; then
   if [[ "$GITHUB_REF" == refs/tags/* ]]; then
     REF_TYPE="tag"
@@ -264,6 +271,47 @@ def validate_image($n; $pkgs):
   | if (.smoke.verify_version | type) != "boolean"
       then error("image \($n): smoke.verify_version must be boolean") else . end;
 
+def tpl_placeholders: ["{version}", "{date}", "{sha12}", "{sha}", "{ref}"];
+
+def tpl_strip: reduce tpl_placeholders[] as $p (.; split($p) | join(""));
+
+def validate_template($what; $needs_commit):
+  if type != "string" or length == 0 then error("\($what) must be a non-empty string") else . end
+  | if (tpl_strip | test("^[a-zA-Z0-9.-]*$")) | not
+      then error("\($what) may only contain letters, digits, dot, dash, and the placeholders {version}, {date}, {sha12}, {sha}, {ref}") else . end
+  | if $needs_commit and ((contains("{sha}") or contains("{sha12}")) | not)
+      then error("\($what) must contain {sha} or {sha12} so every commit gets its own tag") else . end;
+
+def validate_image_tags($n):
+  if (.repository | type) != "string" or (.repository | test("^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$") | not)
+    then error("image \($n): repository must be a lowercase registry path such as name or group/name") else . end
+  | if (.version | type) != "string" or (.version != "" and (.version | test("^[a-zA-Z0-9][a-zA-Z0-9.-]*$") | not))
+    then error("image \($n): version may only contain letters, digits, dot, dash, and must start with a letter or digit") else . end
+  | (.tag_template | validate_template("image \($n): tag_template"; true)) as $_
+  | (.ref_tag_template | validate_template("image \($n): ref_tag_template"; false)) as $_
+  | if .version == "" and ((.tag_template + .ref_tag_template) | contains("{version}"))
+    then error("image \($n): a tag template uses {version}, so the image must set version") else . end;
+
+def validate_shared_repositories:
+  . as $model
+  | [[.images | to_entries[] | {name: .key, repository: .value.repository, version: .value.version,
+      templates: (.value.tag_template + " " + .value.ref_tag_template),
+      aliases: (.value.default_branch_tags | length)}]
+  | group_by(.repository)[]
+  | select(length > 1)
+  | . as $g
+  | ($g | map(.name) | join(", ")) as $names
+  | if any($g[]; .version == "")
+      then error("images \($names) share repository \($g[0].repository), so each must set version") else . end
+  | if ($g | map(.version) | unique | length) != ($g | length)
+      then error("images \($names) share repository \($g[0].repository), so their versions must differ") else . end
+  | if any($g[]; (.templates | split(" ") | all(contains("{version}"))) | not)
+      then error("images \($names) share repository \($g[0].repository), so tag_template and ref_tag_template must both contain {version}") else . end
+  | if any($g[]; .aliases > 0)
+      then error("images \($names) share repository \($g[0].repository), so they cannot publish default_branch_tags; set default_branch_tags to [] on each") else . end
+  | empty]
+  | $model;
+
 def normalize_v2:
   if (.version | tostring) != "2" then error("catalog version must be 2") else . end
   | if ((.registry // "") | type) != "string" then error("registry must be a string") else . end
@@ -271,6 +319,8 @@ def normalize_v2:
       then error("tag_prefix may only contain letters, digits, dot, dash") else . end
   | . as $c
   | (if $c | has("default_branch_tags") then ($c.default_branch_tags | tag_list("default_branch_tags")) else [] end) as $top_tags
+  | (if $c | has("tag_template") then ($c.tag_template | validate_template("tag_template"; true)) else "{sha}" end) as $top_tpl
+  | (if $c | has("ref_tag_template") then ($c.ref_tag_template | validate_template("ref_tag_template"; false)) else "{ref}" end) as $top_ref_tpl
   | (reduce (($c.packages // {}) | to_entries[]) as $e ({};
         .[$e.key] = ($e.value | norm_package($e.key) | validate_package($e.key)))) as $pkgs
   | ($pkgs | keys) as $pkgnames
@@ -294,8 +344,14 @@ def normalize_v2:
           .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames)
             | . + {default_branch_tags: (if ($e.value | has("default_branch_tags"))
                 then ($e.value.default_branch_tags | tag_list("images.\($e.key).default_branch_tags"))
-                else $top_tags end)})))
+                else $top_tags end),
+              repository: (if ($e.value | has("repository")) then $e.value.repository else $e.key end),
+              version: (if ($e.value | has("version")) then $e.value.version else "" end),
+              tag_template: (if ($e.value | has("tag_template")) then $e.value.tag_template else $top_tpl end),
+              ref_tag_template: (if ($e.value | has("ref_tag_template")) then $e.value.ref_tag_template else $top_ref_tpl end)}
+            | validate_image_tags($e.key))))
     }
+  | validate_shared_repositories
   | if (.release.tag_regex | type) != "string" then error("release.tag_regex must be a string") else . end
   | if (.hooks.pre_build | type) != "string" then error("hooks.pre_build must be a string") else . end;
 
@@ -387,6 +443,10 @@ def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
 def has_smoke($s): (($s.commands | length) > 0) or ($s.script != "");
 def uniq_keep: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
 def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $i.primary == $b then "" else ($b + "-") end));
+def tag_ctx($sha; $date; $ref): {sha: $sha, sha12: $sha[0:12], date: $date, ref: $ref};
+def render_tpl($t; $ctx): reduce ($ctx | to_entries[]) as $e ($t; split("{\($e.key)}") | join($e.value));
+def sha_tag_for($m; $i; $b; $ctx; $sfx): prefix_for($m; $i; $b) + render_tpl($i.tag_template; $ctx + {version: $i.version}) + $sfx;
+def ref_tag_for($m; $i; $b; $ctx; $sfx): prefix_for($m; $i; $b) + render_tpl($i.ref_tag_template; $ctx + {version: $i.version}) + $sfx;
 def local_ref($id): "local/" + ($id | ascii_downcase) + ":smoke";
 def merge_args($hook; $args): ($hook + $args) | to_entries | map("\(.key)=\(.value)") | join("\n");
 def pkg_env($hook; $env): [$hook, $env] | map(select(. != "")) | join("\n");
@@ -848,12 +908,14 @@ main() {
     --arg sha "$HEAD_SHA" \
     --arg git_sha "$git_sha" \
     --arg git_date "$git_date" \
+    --arg date "$BUILD_DATE" \
     --arg ref_name "$PUBLISH_TAG" \
     --arg version "$VERSION" \
     --arg source_ref_override "$SOURCE_REF_OVERRIDE" \
     --arg is_release "$IS_RELEASE" \
     "${JQ_LIB}"'
       $m[0] as $m
+      | tag_ctx($sha; $date; ($ref_name | sanitize_ref)) as $ctx
       | ([ $pkgs[] as $p
           | $m.packages[$p] as $c
           | (if $trusted then $c.archs else [$c.archs[] | select(. == "x86_64")] end)[] as $arch
@@ -947,9 +1009,10 @@ main() {
                     config: "",
                     needs_packages: "",
                     suffix: "",
-                    sha_tag: (prefix_for($m; $i; "docker") + $sha),
-                    ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
-                    registry: $m.registry
+                    sha_tag: sha_tag_for($m; $i; "docker"; $ctx; ""),
+                    ref_tag: ref_tag_for($m; $i; "docker"; $ctx; ""),
+                    registry: $m.registry,
+                    repository: $i.repository
                   }] else [] end)
               + (if $i.builders.apko then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
@@ -971,9 +1034,10 @@ main() {
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
                       suffix: $v.tag_suffix,
-                      sha_tag: (prefix_for($m; $i; "apko") + $sha + $v.tag_suffix),
-                      ref_tag: (prefix_for($m; $i; "apko") + ($ref_name | sanitize_ref) + $v.tag_suffix),
-                      registry: $m.registry
+                      sha_tag: sha_tag_for($m; $i; "apko"; $ctx; $v.tag_suffix),
+                      ref_tag: ref_tag_for($m; $i; "apko"; $ctx; $v.tag_suffix),
+                      registry: $m.registry,
+                      repository: $i.repository
                     } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "apko"); $v.tag_suffix))
                 ] else [] end)
               + (if $i.builders.docker and $i.builders.docker.mode == "ko" then [{
@@ -994,9 +1058,10 @@ main() {
                   config: "",
                   needs_packages: "",
                   suffix: "",
-                  sha_tag: (prefix_for($m; $i; "docker") + $sha),
-                  ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
-                  registry: $m.registry
+                  sha_tag: sha_tag_for($m; $i; "docker"; $ctx; ""),
+                  ref_tag: ref_tag_for($m; $i; "docker"; $ctx; ""),
+                  registry: $m.registry,
+                  repository: $i.repository
                 } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
             ) | .[]
           end
@@ -1009,8 +1074,9 @@ main() {
                 id: "\($n)-docker",
                 image: $n,
                 registry: $m.registry,
-                sha_tag: (prefix_for($m; $i; "docker") + $sha),
-                ref_tag: (prefix_for($m; $i; "docker") + ($ref_name | sanitize_ref)),
+                repository: $i.repository,
+                sha_tag: sha_tag_for($m; $i; "docker"; $ctx; ""),
+                ref_tag: ref_tag_for($m; $i; "docker"; $ctx; ""),
                 pushed_pattern: "pushed-\($n)-docker-*",
                 final_artifact: "final-\($n)-docker"
               } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))
@@ -1027,6 +1093,7 @@ main() {
                     arch: $a,
                     runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                     registry: $m.registry,
+                    repository: $i.repository,
                     final_artifact: "final-\($n)-\(if $i.builders.docker.mode == "ko" then "ko" else "docker" end)",
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
                     smoke_script: $i.builders.docker.smoke.script,
@@ -1042,6 +1109,7 @@ main() {
                         arch: $a,
                         runner: (if $a == "amd64" then "ubuntu-24.04" else "ubuntu-24.04-arm" end),
                         registry: $m.registry,
+                        repository: $i.repository,
                         final_artifact: "final-\($n)-apko\($sfx)",
                         smoke_commands: ($v.smoke.commands | tojson),
                         smoke_script: $v.smoke.script,
@@ -1068,6 +1136,14 @@ main() {
           selected_packages: ($pkgs | join(","))
         }
     ')
+
+  local bad_tag
+  bad_tag=$(jq -r '[(.publish_matrix, .manifest_matrix) | fromjson | .[] | .sha_tag, .ref_tag, ((.alias_tags // "") | split(",")[])]
+      | map(select(length > 0 and (test("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$") | not))) | first // empty' <<< "$outputs")
+  if [[ -n "$bad_tag" ]]; then
+    echo "::error::Rendered tag '$bad_tag' is not a valid OCI tag" >&2
+    exit 1
+  fi
 
   if [[ "$TRUSTED" == "true" ]] && [[ -z "$registry" ]]; then
     if [[ "$(jq -r '.publish_matrix' <<< "$outputs")" != "[]" || "$(jq -r '.manifest_matrix' <<< "$outputs")" != "[]" ]]; then
