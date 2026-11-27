@@ -93,7 +93,10 @@ runs only factory code. See Lock files in the catalog reference.
 
 The planner is `actions/plan-images`. The step actions are
 `actions/build-packages`, `actions/stage-packages`, `actions/build-image`,
-`actions/smoke-test`, and `actions/publish-image`. Packages are built with
+`actions/smoke-test`, `actions/local-registry`, `actions/publish-image`, and
+`actions/promote-image`. Trusted runs build into a local staging registry,
+smoke test the staged digest, and only then copy that exact digest to the
+registry, verifying it after the copy. Packages are built with
 op-melange from `actions/install-op-melange`, so package SBOMs list the Go
 modules compiled into Go binaries as `pkg:golang` purls. apko runs in the
 pinned Wolfi SDK image with the op-apko binary from `actions/install-op-apko`

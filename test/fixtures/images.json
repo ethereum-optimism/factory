@@ -23,6 +23,24 @@
       "smoke": {
         "commands": [
           "/bin/sh -c true"
+        ],
+        "tests": [
+          {
+            "shell": "echo smoke-ok",
+            "expected_output": "smoke-ok"
+          },
+          {
+            "shell": "exit 3",
+            "expected_exit": 3
+          },
+          {
+            "entrypoint": "/bin/echo",
+            "args": [
+              "two words",
+              "second"
+            ],
+            "expected_output": "two words second"
+          }
         ]
       }
     },

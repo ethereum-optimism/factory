@@ -328,7 +328,8 @@ assert_json "$(matrix manifest_matrix)" '.[0].sha_tag' "$SHA"
 assert_json "$(matrix manifest_matrix)" 'length' '1'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "docker") | .arch] | join(",")' 'amd64,arm64'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.arch == "arm64") | .runner] | unique | join(",")' 'ubuntu-24.04-arm'
-assert_json "$(matrix publish_matrix)" '[.[] | has("smoke_local") or has("smoke_commands")] | any' 'false'
+assert_json "$(matrix publish_matrix)" '[.[] | .id + "=" + .smoke_arch] | sort | join(",")' 'both-apko=amd64,both-docker-amd64=amd64,both-docker-arm64=arm64'
+assert_json "$(matrix publish_matrix)" '[.[].smoke_commands] | unique | join(",")' '["/bin/sh -c true"]'
 assert_eq "$(out_value "$OUT" has_smoke)" "true" "dual has_smoke"
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .archs] | join(",")' 'amd64,arm64'
 assert_json "$(matrix publish_matrix)" '[.[] | select(.builder == "apko") | .needs_packages] | join(",")' 'stack'
@@ -1896,5 +1897,68 @@ printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix"
 expect_plan_error lock_with_local_packages local.json "an apko lockfile with needs_packages is not supported yet" TRUSTED=true
 
 popd >/dev/null
+
+# --- Smoke tests and smoke before publish ---------------------------------------------
+
+smoke_tests_cat="$TEST_DIR/smoke-tests.json"
+cat > "$smoke_tests_cat" <<'JSON'
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  "images": {
+    "node": {
+      "builders": {"docker": {"archs": ["amd64", "arm64"]}},
+      "smoke": {
+        "tests": [
+          {"entrypoint": "/usr/local/bin/geth", "args": ["version"], "expected_output": "Geth"},
+          {"shell": "geth --help | head -1", "expected_exit": 0},
+          {"args": ["--bad-flag"], "expected_exit": 2, "expected_output": "flag provided but not defined"}
+        ],
+        "verify_version": true
+      }
+    },
+    "armonly": {
+      "builders": {"apko": {"config": "apko/armonly.yaml"}},
+      "archs": ["arm64"],
+      "smoke": {"tests": [{"args": ["--version"]}]}
+    },
+    "nosmoke": {
+      "builders": {"apko": {"config": "apko/nosmoke.yaml"}}
+    }
+  }
+}
+JSON
+
+run_plan smoke_tests_trusted "$smoke_tests_cat" TRUSTED=true
+smoke_pub=$(matrix publish_matrix)
+assert_json "$smoke_pub" '[.[] | select(.image == "node") | .smoke_arch] | join(",")' 'amd64,arm64'
+assert_json "$smoke_pub" '[.[] | select(.image == "node")][0].smoke_tests | fromjson | .[0].entrypoint' '/usr/local/bin/geth'
+assert_json "$smoke_pub" '[.[] | select(.image == "node")][0].smoke_tests | fromjson | .[0] | "\(.args | join(" "))|\(.expected_exit)|\(.expected_output)|\(.shell)"' 'version|0|Geth|'
+assert_json "$smoke_pub" '[.[] | select(.image == "node")][0].smoke_tests | fromjson | .[1] | "\(.entrypoint)|\(.shell)|\(.args | length)"' '/bin/sh|geth --help | head -1|0'
+assert_json "$smoke_pub" '[.[] | select(.image == "node")][0].smoke_tests | fromjson | .[2] | "\(.entrypoint)|\(.expected_exit)"' '|2'
+assert_json "$smoke_pub" '[.[] | select(.image == "node") | .has_smoke] | unique | join(",")' 'true'
+assert_json "$smoke_pub" '[.[] | select(.image == "armonly") | .smoke_arch] | join(",")' ''
+assert_json "$smoke_pub" '[.[] | select(.image == "nosmoke") | "\(.has_smoke)|\(.smoke_arch)"] | join(",")' 'false|'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.image == "node") | .smoke_tests | fromjson | length] | unique | join(",")' '3'
+assert_json "$(matrix smoke_matrix)" '[.[] | select(.image == "armonly") | .arch] | join(",")' 'arm64'
+
+run_plan smoke_tests_release "$smoke_tests_cat" GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/node/v1.2.3 \
+  GITHUB_REF_NAME=node/v1.2.3 GITHUB_REF_TYPE=tag TRUSTED=true
+assert_json "$(matrix publish_matrix)" '[.[].expected_version] | unique | join(",")' 'v1.2.3'
+
+run_plan smoke_tests_untrusted "$smoke_tests_cat" GITHUB_EVENT_NAME=workflow_dispatch TRUSTED=false
+assert_json "$(matrix build_matrix)" '[.[] | select(.image == "node")][0] | "\(.has_smoke)|\(.smoke_tests | fromjson | length)"' 'true|3'
+
+reject_smoke() {
+  jq --argjson t "$2" '.images.node.smoke.tests = [$t]' "$smoke_tests_cat" > "$TEST_DIR/$1.json"
+  expect_plan_error "$1" "$TEST_DIR/$1.json" "$3" TRUSTED=true
+}
+reject_smoke smoke_both '{"shell": "true", "args": ["x"]}' 'take shell or args, not both'
+reject_smoke smoke_empty '{"expected_exit": 0}' 'need args, entrypoint, or shell'
+reject_smoke smoke_exit_range '{"args": ["x"], "expected_exit": 256}' 'expected_exit must be an integer from 0 to 255'
+reject_smoke smoke_exit_type '{"args": ["x"], "expected_exit": "1"}' 'expected_exit must be an integer from 0 to 255'
+reject_smoke smoke_args_type '{"args": "x y"}' 'args must be an array of strings'
+reject_smoke smoke_unknown '{"args": ["x"], "docker_args": "--rm"}' 'do not take docker_args'
+reject_smoke smoke_output_type '{"args": ["x"], "expected_output": 1}' 'must be strings'
 
 echo "plan-images tests passed"

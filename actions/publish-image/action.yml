@@ -1,13 +1,15 @@
 name: 'Publish image'
 description: >
-  Publish one image to the registry and print its digest. Four kinds:
-  apko publishes a multi-architecture image with apko publish inside the pinned
-  Wolfi SDK image; ko publishes a multi-architecture image with ko build for
-  every architecture in one invocation; docker-arch builds one architecture
-  natively and pushes it by digest; docker-manifest merges the per-architecture
-  digests into the tagged manifest list. The action configures the gcloud Docker
-  credential helper for the registry. The calling job must authenticate to Google
-  Cloud with google-github-actions/auth first.
+  Build one image and print its digest. Four kinds: apko publishes a
+  multi-architecture image with apko publish inside the pinned Wolfi SDK image;
+  ko publishes a multi-architecture image with ko build for every architecture
+  in one invocation; docker-arch builds one architecture natively and pushes it
+  by digest. These three push to the local staging registry in stage_registry,
+  for actions/smoke-test and actions/promote-image to test and copy the exact
+  digest. docker-manifest merges the per-architecture digests already in the
+  registry into the tagged manifest list. The action configures the gcloud
+  Docker credential helper for the registry. The calling job must authenticate
+  to Google Cloud with google-github-actions/auth first.
 
 inputs:
   kind:
@@ -24,13 +26,17 @@ inputs:
     required: false
     default: ''
   sha_tag:
-    description: 'Tag for the commit SHA, including any builder prefix and variant suffix.'
+    description: 'Tag for the commit SHA, including any builder prefix and variant suffix. apko and ko kinds push it to the staging registry; docker-manifest publishes it.'
     required: true
   ref_tag:
-    description: 'Tag for the sanitized ref or release version, including any builder prefix and variant suffix.'
+    description: 'Tag for the sanitized ref or release version, including any builder prefix and variant suffix. Published by the docker-manifest kind; actions/promote-image publishes it for the other kinds.'
     required: true
+  stage_registry:
+    description: 'apko, ko, and docker-arch kinds: local staging registry address, for example localhost:5000. Required for those kinds.'
+    required: false
+    default: ''
   alias_tags:
-    description: 'Extra tag names, comma-separated, without registry, each including any builder prefix and variant suffix. Published on the same image as sha_tag and ref_tag. Empty publishes none.'
+    description: 'docker-manifest kind only: extra tag names, comma-separated, without registry, each including any builder prefix and variant suffix. Published on the same image as sha_tag and ref_tag. Empty publishes none.'
     required: false
     default: ''
   id:
@@ -117,6 +123,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Require a staging registry
+      if: inputs.kind != 'docker-manifest'
+      shell: bash
+      env:
+        STAGE_REGISTRY: ${{ inputs.stage_registry }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$STAGE_REGISTRY" =~ ^localhost:[0-9]+$ ]]; then
+          echo "::error::stage_registry must be localhost:<port>, got '$STAGE_REGISTRY'" >&2
+          exit 1
+        fi
+
     - name: Configure Artifact Registry credential helper
       shell: bash
       env:
@@ -141,6 +159,8 @@ runs:
     - name: Set up Docker Buildx
       if: inputs.kind != 'apko'
       uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+      with:
+        driver-opts: network=host
 
     - name: Publish with apko
       id: apko
@@ -150,15 +170,11 @@ runs:
         APKO_SANDBOX: ${{ steps.sandbox.outputs.image }}
         APKO_BIN: ${{ steps.apko_bin.outputs.path }}
         APKO_CONFIG: ${{ inputs.config }}
-        APKO_TAG: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}:${{ inputs.sha_tag }}
-        APKO_EXTRA_TAGS: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}:${{ inputs.ref_tag }}
-        APKO_REPO: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}
-        APKO_ALIAS_TAGS: ${{ inputs.alias_tags }}
+        APKO_TAG: ${{ inputs.stage_registry }}/${{ inputs.repository || inputs.image }}:${{ inputs.sha_tag }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
         APKO_LOCKFILE: ${{ inputs.lockfile }}
         APKO_CACHE_DIR: ${{ inputs.cache_dir }}
-        APKO_GENERIC_USER: oauth2accesstoken
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -166,17 +182,6 @@ runs:
         config_dir="$(cd "$(dirname "$config_path")" && pwd)"
         config_file="$(basename "$config_path")"
         out_dir="$(mktemp -d "${APKO_BUILD_ROOT}/apko-publish.XXXXXX")"
-
-        token="$(gcloud auth print-access-token)"
-        echo "::add-mask::$token"
-        export APKO_GENERIC_PASS="$token"
-
-        if [ -n "$APKO_ALIAS_TAGS" ]; then
-          IFS=',' read -ra alias_tags <<< "$APKO_ALIAS_TAGS"
-          for alias_tag in "${alias_tags[@]}"; do
-            APKO_EXTRA_TAGS="${APKO_EXTRA_TAGS},${APKO_REPO}:${alias_tag}"
-          done
-        fi
 
         source "${GITHUB_ACTION_PATH}/apko-mounts.sh"
         apko_container_layout "$config_dir" "$out_dir"
@@ -205,20 +210,7 @@ runs:
 
         read -r -d '' apko_script <<'APKO_EOF' || true
         set -euo pipefail
-        if [[ -n "$APKO_GENERIC_USER" && -n "$APKO_GENERIC_PASS" ]]; then
-          echo "$APKO_GENERIC_PASS" | /usr/bin/apko login -u "$APKO_GENERIC_USER" \
-            --password-stdin "$(echo "$APKO_TAG" | cut -d'/' -f1)"
-        fi
         export SOURCE_DATE_EPOCH=0
-        tags=("$APKO_TAG")
-        if [[ -n "$APKO_EXTRA_TAGS" ]]; then
-          IFS=',' read -ra extra_tags <<< "$APKO_EXTRA_TAGS"
-          for tag in "${extra_tags[@]}"; do
-            tag="${tag#"${tag%%[![:space:]]*}"}"
-            tag="${tag%"${tag##*[![:space:]]}"}"
-            [[ -n "$tag" ]] && tags+=("$tag")
-          done
-        fi
         repos=()
         [[ -n "$APKO_REPOSITORIES" ]] && repos=(-r "$APKO_REPOSITORIES")
         mode_args=(--ignore-signatures)
@@ -229,17 +221,14 @@ runs:
           "${mode_args[@]}" \
           --arch "$APKO_ARCHS" \
           "${repos[@]+"${repos[@]}"}" \
-          "$APKO_CONFIG_PATH" "${tags[@]}" | tee "$APKO_OUT_DIR/publish.digest"
+          "$APKO_CONFIG_PATH" "$APKO_TAG" | tee "$APKO_OUT_DIR/publish.digest"
         APKO_EOF
 
         docker run --rm --network host \
           --entrypoint /bin/bash \
           --workdir "$apko_workdir" \
           "${mounts[@]}" \
-          -e APKO_GENERIC_USER \
-          -e APKO_GENERIC_PASS \
           -e APKO_TAG \
-          -e APKO_EXTRA_TAGS \
           -e APKO_REPOSITORIES \
           -e APKO_ARCHS \
           -e APKO_CONFIG_PATH="${config_dir}/${config_file}" \
@@ -262,10 +251,8 @@ runs:
         KO_LDFLAGS: ${{ inputs.ldflags }}
         KO_ENV: ${{ inputs.env }}
         KO_ARCHS: ${{ inputs.archs }}
-        KO_REPO: ${{ inputs.registry }}/${{ inputs.repository || inputs.image }}
+        KO_REPO: ${{ inputs.stage_registry }}/${{ inputs.repository || inputs.image }}
         KO_SHA_TAG: ${{ inputs.sha_tag }}
-        KO_REF_TAG: ${{ inputs.ref_tag }}
-        KO_ALIAS_TAGS: ${{ inputs.alias_tags }}
         KO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -279,14 +266,7 @@ runs:
         done
         platforms="${platforms%,}"
 
-        ko_tags="${KO_SHA_TAG},${KO_REF_TAG}"
-        if [ -n "$KO_ALIAS_TAGS" ]; then
-          IFS=',' read -ra alias_tags <<< "$KO_ALIAS_TAGS"
-          for alias_tag in "${alias_tags[@]}"; do
-            ko_tags="${ko_tags},${alias_tag}"
-          done
-        fi
-        ko_args=(build --bare --sbom=spdx --platform="$platforms" --tags="$ko_tags")
+        ko_args=(build --bare --sbom=spdx --platform="$platforms" --tags="$KO_SHA_TAG")
         while IFS= read -r flag; do
           if [ -n "$flag" ]; then
             ko_args+=("--ldflags=${flag}")
@@ -308,7 +288,7 @@ runs:
         ko "${ko_args[@]}" "$KO_IMPORTPATH" > "${out_dir}/publish.out"
 
         ref="$(tail -n 1 "${out_dir}/publish.out")"
-        if [[ "$ref" != "${KO_REPO}@sha256:"* ]]; then
+        if [[ "$ref" != "${KO_REPO}@sha256:"* && "$ref" != "${KO_REPO}:${KO_SHA_TAG}@sha256:"* ]]; then
           echo "::error::ko did not print a published reference for ${KO_REPO}; got: '$ref'" >&2
           exit 1
         fi
@@ -331,7 +311,7 @@ runs:
         push: true
         cache-from: type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
         cache-to: type=gha,mode=max,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
-        outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.repository || inputs.image }},push=true
+        outputs: type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.stage_registry }}/${{ inputs.repository || inputs.image }},push=true,registry.insecure=true
 
     - name: Push architecture with docker bake
       id: bake
@@ -351,7 +331,7 @@ runs:
           *.attest=type=sbom
           *.cache-from=type=gha,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
           *.cache-to=type=gha,mode=max,scope=${{ inputs.image }}-docker-${{ inputs.arch }}
-          *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.registry }}/${{ inputs.repository || inputs.image }},push=true
+          *.output=type=image,push-by-digest=true,name-canonical=true,name=${{ inputs.stage_registry }}/${{ inputs.repository || inputs.image }},push=true,registry.insecure=true
           ${{ inputs.set }}
 
     - name: Merge digests into manifest list
@@ -413,7 +393,7 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Refresh registry auth for attestation push
-      if: inputs.kind == 'apko' || inputs.kind == 'ko' || inputs.kind == 'docker-manifest'
+      if: inputs.kind == 'docker-manifest'
       shell: bash
       env:
         REGISTRY: ${{ inputs.registry }}

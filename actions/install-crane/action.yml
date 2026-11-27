@@ -1,0 +1,33 @@
+name: 'Install crane'
+description: >
+  Install the pinned crane release for the runner architecture and put it on
+  PATH. The release tarball is verified against a pinned sha256 before it is
+  extracted. Uses no registry credentials and no OIDC token.
+
+runs:
+  using: composite
+  steps:
+    - name: Install crane
+      shell: bash
+      env:
+        CRANE_VERSION: v0.22.1
+        CRANE_SHA256_X86_64: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+        CRANE_SHA256_ARM64: 898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) asset_arch=x86_64; sha256="$CRANE_SHA256_X86_64" ;;
+          aarch64|arm64) asset_arch=arm64; sha256="$CRANE_SHA256_ARM64" ;;
+          *) echo "::error::unsupported runner architecture $(uname -m)" >&2; exit 1 ;;
+        esac
+        archive_dir="$(mktemp -d "${RUNNER_TEMP}/crane-archive.XXXXXX")"
+        archive="${archive_dir}/crane.tar.gz"
+        curl -fsSL --retry 5 --retry-all-errors -o "$archive" \
+          "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_${asset_arch}.tar.gz"
+        echo "${sha256}  ${archive}" | sha256sum -c -
+        bin_dir="${RUNNER_TEMP}/crane-bin"
+        mkdir -p "$bin_dir"
+        tar -xzf "$archive" -C "$bin_dir" crane
+        chmod +x "${bin_dir}/crane"
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        "${bin_dir}/crane" version

@@ -26,6 +26,7 @@ awk '
 sed \
   -e 's|\${{ inputs.arch }}|amd64|g' \
   -e 's/\${{ inputs.repository || inputs.image }}/selftest-bake/g' \
+  -e 's|\${{ inputs.stage_registry }}|localhost:5000|g' \
   -e 's|\${{ inputs.image }}|selftest-bake|g' \
   -e 's|\${{ inputs.registry }}|registry.invalid/selftest|g' \
   -e '/^\${{ inputs.set }}$/d' \
@@ -67,8 +68,12 @@ if grep -q 'registry_token' "$ACTION"; then
 fi
 grep -q -F "configure-docker \"\${REGISTRY%%/*}\" --quiet" "$ACTION" \
   || fail "credential helper is not configured for the registry host"
-grep -q -F "export APKO_GENERIC_PASS=\"\$token\"" "$ACTION" \
-  || fail "apko login does not mint its token immediately before the sandbox starts"
+if grep -q -F "gcloud auth print-access-token" "$ACTION"; then
+  fail "publish-image passes a registry token into the apko sandbox; apko publishes to the staging registry"
+fi
+jq -e --arg t "$TARGET" '
+  .target[$t].output[0].name | startswith("localhost:5000/")
+' "$WORK/print.json" > /dev/null || fail "docker-arch output does not push to the staging registry"
 
 REFRESH="$ROOT/actions/publish-image/refresh-attest-auth.sh"
 [ -x "$REFRESH" ] || fail "missing $REFRESH"
@@ -92,10 +97,10 @@ expected_auth="$(printf 'oauth2accesstoken:fake-token-123' | base64 | tr -d '\n'
 jq -e --arg a "$expected_auth" '.auths["us-docker.pkg.dev"].auth == $a' "$CONFIG" > /dev/null \
   || fail "refresh did not write the registry host auths entry"
 
-grep -q -F "KO_ALIAS_TAGS" "$ACTION" \
-  || fail "alias tags are not passed to the ko publish path"
-grep -q -F "APKO_ALIAS_TAGS" "$ACTION" \
-  || fail "alias tags are not passed to the apko publish path"
+grep -q -F 'KO_REPO: ${{ inputs.stage_registry }}/' "$ACTION" \
+  || fail "ko does not push to the staging registry"
+grep -q -F 'APKO_TAG: ${{ inputs.stage_registry }}/' "$ACTION" \
+  || fail "apko does not push to the staging registry"
 grep -q -F "tag_args+=(-t \"\${name}:\${alias_tag}\")" "$ACTION" \
   || fail "alias tags are not added to the manifest list tags"
 

@@ -3,8 +3,9 @@ name: Build images (Reusable)
 # Builds Dockerfile and apko images from the caller's images catalog.
 # Untrusted runs (pull requests, merge groups, forks, other branches) build
 # amd64 images locally and smoke test them. Trusted runs (default branch
-# pushes, schedules, dispatches on the default branch, tags) publish, attest,
-# and smoke test every architecture of the pushed digest.
+# pushes, schedules, dispatches on the default branch, tags) build into a local
+# staging registry, smoke test the staged digest, copy that digest to the
+# registry, attest it, and smoke test every architecture of the pushed digest.
 #
 # Every job checks out this repository at job.workflow_sha and runs the
 # composite actions from that checkout. The result job is the single status to
@@ -355,6 +356,7 @@ jobs:
           image: ${{ steps.build.outputs.image }}
           arch: amd64
           commands: ${{ matrix.smoke_commands }}
+          tests: ${{ matrix.smoke_tests }}
           script: ${{ matrix.smoke_script }}
 
   publish:
@@ -454,12 +456,17 @@ jobs:
         if: matrix.mode == 'ko'
         uses: ./.factory/actions/install-ko
 
-      - name: Publish image
+      - name: Start staging registry
+        id: stage_registry
+        uses: ./.factory/actions/local-registry
+
+      - name: Build image into the staging registry
         id: publish
         uses: ./.factory/actions/publish-image
         with:
           kind: ${{ matrix.kind }}
           registry: ${{ matrix.registry }}
+          stage_registry: ${{ steps.stage_registry.outputs.address }}
           image: ${{ matrix.image }}
           repository: ${{ matrix.repository }}
           sha_tag: ${{ matrix.sha_tag }}
@@ -484,12 +491,44 @@ jobs:
           ldflags: ${{ matrix.ldflags }}
           env: ${{ matrix.env }}
 
+      - name: Smoke test staged digest
+        if: matrix.has_smoke && matrix.smoke_arch != ''
+        uses: ./.factory/actions/smoke-test
+        with:
+          image: ${{ steps.stage_registry.outputs.address }}/${{ matrix.repository }}@${{ steps.publish.outputs.digest }}
+          arch: ${{ matrix.smoke_arch }}
+          pull: true
+          commands: ${{ matrix.smoke_commands }}
+          tests: ${{ matrix.smoke_tests }}
+          script: ${{ matrix.smoke_script }}
+          expected_version: ${{ matrix.expected_version }}
+
+      - name: Copy the tested digest to the registry
+        id: promote
+        uses: ./.factory/actions/promote-image
+        with:
+          kind: ${{ matrix.kind }}
+          source: ${{ steps.stage_registry.outputs.address }}/${{ matrix.repository }}
+          digest: ${{ steps.publish.outputs.digest }}
+          registry: ${{ matrix.registry }}
+          repository: ${{ matrix.repository }}
+          sha_tag: ${{ matrix.sha_tag }}
+          ref_tag: ${{ matrix.ref_tag }}
+          alias_tags: ${{ matrix.alias_tags }}
+          id: ${{ matrix.id }}
+
+      - name: Refresh registry auth for attestation push
+        if: matrix.kind == 'apko' || matrix.kind == 'ko'
+        env:
+          REGISTRY: ${{ matrix.registry }}
+        run: bash .factory/actions/publish-image/refresh-attest-auth.sh
+
       - name: Attest image provenance
         if: matrix.kind == 'apko' || matrix.kind == 'ko'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ${{ matrix.registry }}/${{ matrix.repository }}
-          subject-digest: ${{ steps.publish.outputs.digest }}
+          subject-digest: ${{ steps.promote.outputs.digest }}
           push-to-registry: true
           show-summary: false
 
@@ -510,6 +549,12 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.id }}.txt
           if-no-files-found: error
           retention-days: 1
+
+      - name: Stop staging registry
+        if: always() && steps.stage_registry.outputs.container != ''
+        env:
+          CONTAINER: ${{ steps.stage_registry.outputs.container }}
+        run: docker rm -f "$CONTAINER" > /dev/null 2>&1 || true
 
   publish-manifest:
     name: manifest (${{ matrix.image }})
@@ -702,6 +747,7 @@ jobs:
           arch: ${{ matrix.arch }}
           pull: true
           commands: ${{ matrix.smoke_commands }}
+          tests: ${{ matrix.smoke_tests }}
           script: ${{ matrix.smoke_script }}
           expected_version: ${{ matrix.expected_version }}
 

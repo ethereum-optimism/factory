@@ -8,6 +8,8 @@ on:
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
+      - actions/promote-image/**
+      - actions/smoke-test/**
       - scripts/lint-untrusted-permissions*
       - test/fixtures/**
       - .github/workflows/build-images*.yaml
@@ -21,6 +23,8 @@ on:
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
+      - actions/promote-image/**
+      - actions/smoke-test/**
       - scripts/lint-untrusted-permissions*
       - test/fixtures/**
       - .github/workflows/build-images*.yaml
@@ -53,6 +57,12 @@ jobs:
 
       - name: Test fetch-apks
         run: python3 -m unittest discover -s actions/fetch-apks -p 'test_*.py' -v
+
+      - name: Test smoke-test assertions
+        run: actions/smoke-test/smoke-test.test.sh
+
+      - name: Test promote-image digest checks
+        run: actions/promote-image/promote.test.sh
 
       - name: Lint self-tests
         run: scripts/lint-untrusted-permissions.test.sh

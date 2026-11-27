@@ -1,8 +1,9 @@
 name: 'Smoke test'
 description: >
-  Run smoke commands and an optional script against one image. Verifies the
-  image architecture, runs each command with its entrypoint, and fails when
-  expected_version is set and no command reports it.
+  Run smoke commands, smoke tests, and an optional script against one image.
+  Verifies the image architecture, runs each command with its entrypoint, runs
+  each test and checks its exit code and output, and fails when
+  expected_version is set and no command or test reports it.
 
 inputs:
   image:
@@ -17,6 +18,10 @@ inputs:
     default: 'false'
   commands:
     description: 'JSON array of smoke commands. Each string is split on whitespace into entrypoint and arguments.'
+    required: false
+    default: '[]'
+  tests:
+    description: 'JSON array of smoke tests, each {args, entrypoint, shell, expected_exit, expected_output} as normalized by plan-images.'
     required: false
     default: '[]'
   script:
@@ -38,6 +43,7 @@ runs:
         IMAGE_ARCH: ${{ inputs.arch }}
         PULL: ${{ inputs.pull }}
         COMMANDS: ${{ inputs.commands }}
+        TESTS: ${{ inputs.tests }}
         SCRIPT: ${{ inputs.script }}
         EXPECTED_VERSION: ${{ inputs.expected_version }}
       run: |
@@ -79,8 +85,48 @@ runs:
           fi
         done < <(jq -r '.[]' <<< "$COMMANDS")
 
+        test_count="$(jq 'length' <<< "${TESTS:-[]}")"
+        for ((i = 0; i < test_count; i++)); do
+          test_json="$(jq -c --argjson i "$i" '.[$i]' <<< "$TESTS")"
+          entrypoint="$(jq -r '.entrypoint // ""' <<< "$test_json")"
+          shell_cmd="$(jq -r '.shell // ""' <<< "$test_json")"
+          expected_exit="$(jq -r '.expected_exit // 0' <<< "$test_json")"
+          expected_output="$(jq -r '.expected_output // ""' <<< "$test_json")"
+          args=()
+          while IFS= read -r -d '' arg; do
+            args+=("$arg")
+          done < <(jq -j '(.args // [])[] | ., "\u0000"' <<< "$test_json")
+          run=(docker run --rm --platform "linux/$IMAGE_ARCH")
+          if [ -n "$entrypoint" ]; then
+            run+=(--entrypoint "$entrypoint")
+          fi
+          run+=("$IMAGE")
+          if [ -n "$shell_cmd" ]; then
+            run+=(-c "$shell_cmd")
+          else
+            run+=("${args[@]+"${args[@]}"}")
+          fi
+          echo "==> smoke test $((i + 1)): ${run[*]:5}"
+          set +e
+          output="$("${run[@]}" 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          if [[ -n "$normalized_version" && "$output" == *"$normalized_version"* ]]; then
+            version_matched=true
+          fi
+          if [ "$rc" -ne "$expected_exit" ]; then
+            echo "FAIL: smoke test $((i + 1)) exited with $rc, expected $expected_exit" >&2
+            exit 1
+          fi
+          if [[ -n "$expected_output" && "$output" != *"$expected_output"* ]]; then
+            echo "FAIL: smoke test $((i + 1)) output does not contain: $expected_output" >&2
+            exit 1
+          fi
+        done
+
         if [[ -n "$normalized_version" && "$version_matched" != "true" ]]; then
-          echo "FAIL: no smoke command reported expected version $EXPECTED_VERSION" >&2
+          echo "FAIL: no smoke command or test reported expected version $EXPECTED_VERSION" >&2
           exit 1
         fi
 
