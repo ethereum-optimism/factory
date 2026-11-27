@@ -196,3 +196,23 @@ jobs:
             --lockfile test/fixtures/apko/tiny.lock.json --cache-dir "$GOOD_DIR" \
             test/fixtures/apko/tiny.yaml example.invalid/fetch-apks:selftest "${out_dir}/image.tar"
           test -s "${out_dir}/image.tar"
+
+      - name: A tampered cached package fails the offline build
+        env:
+          GOOD_DIR: ${{ runner.temp }}/good
+        run: |
+          set -euo pipefail
+          tampered="$(mktemp -d "$RUNNER_TEMP/tampered-cache.XXXXXX")"
+          cp -R "$GOOD_DIR"/. "$tampered"/
+          repo="${tampered}/https%3A%2F%2Fpackages.wolfi.dev%2Fos/x86_64"
+          victim="$(jq -r '.contents.packages[] | select(.name == "busybox") | .url | split("/") | last' test/fixtures/apko/tiny.lock.json)"
+          other="$(jq -r '.contents.packages[] | select(.name == "wolfi-baselayout") | .url | split("/") | last' test/fixtures/apko/tiny.lock.json)"
+          cp "${repo}/${other}" "${repo}/${victim}"
+          out_dir="$(mktemp -d "$RUNNER_TEMP/offline-tampered.XXXXXX")"
+          if op-apko build --arch amd64 --offline --require-strong-checksums \
+            --lockfile test/fixtures/apko/tiny.lock.json --cache-dir "$tampered" \
+            test/fixtures/apko/tiny.yaml example.invalid/fetch-apks:tampered "${out_dir}/image.tar"; then
+            echo "::error::op-apko built from a tampered cache" >&2
+            exit 1
+          fi
+          echo "tampered cache rejected"

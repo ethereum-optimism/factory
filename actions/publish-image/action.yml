@@ -48,6 +48,14 @@ inputs:
     description: 'apko kind only: comma-separated APK repository directories from stage-packages.'
     required: false
     default: ''
+  lockfile:
+    description: 'apko kind only: apko lock file, relative to the repository root. When set, apko publishes offline from cache_dir with --lockfile and --require-strong-checksums.'
+    required: false
+    default: ''
+  cache_dir:
+    description: 'apko kind only, with lockfile: apko cache directory from the apk-cache artifact.'
+    required: false
+    default: ''
   arch:
     description: 'docker-arch kind only: architecture to build and push, amd64 or arm64.'
     required: false
@@ -148,6 +156,8 @@ runs:
         APKO_ALIAS_TAGS: ${{ inputs.alias_tags }}
         APKO_REPOSITORIES: ${{ inputs.repositories }}
         APKO_ARCHS: ${{ inputs.archs }}
+        APKO_LOCKFILE: ${{ inputs.lockfile }}
+        APKO_CACHE_DIR: ${{ inputs.cache_dir }}
         APKO_GENERIC_USER: oauth2accesstoken
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
@@ -177,6 +187,21 @@ runs:
             mounts+=(-v "${repo}:${repo}:ro")
           done
         fi
+        lock_path=""
+        cache_dir=""
+        if [ -n "$APKO_LOCKFILE" ]; then
+          if [ -n "$APKO_REPOSITORIES" ]; then
+            echo "::error::lock file builds with local package repositories are not supported" >&2
+            exit 1
+          fi
+          if [ -z "$APKO_CACHE_DIR" ] || [ ! -d "$APKO_CACHE_DIR" ]; then
+            echo "::error::lockfile $APKO_LOCKFILE needs the apk-cache artifact in cache_dir" >&2
+            exit 1
+          fi
+          lock_path="$(cd "$(dirname "${GITHUB_WORKSPACE}/${APKO_LOCKFILE}")" && pwd)/$(basename "$APKO_LOCKFILE")"
+          cache_dir="$(cd "$APKO_CACHE_DIR" && pwd)"
+          mounts+=(-v "${lock_path}:${lock_path}:ro" -v "${cache_dir}:${cache_dir}")
+        fi
 
         read -r -d '' apko_script <<'APKO_EOF' || true
         set -euo pipefail
@@ -196,8 +221,12 @@ runs:
         fi
         repos=()
         [[ -n "$APKO_REPOSITORIES" ]] && repos=(-r "$APKO_REPOSITORIES")
+        mode_args=(--ignore-signatures)
+        if [[ -n "$APKO_LOCK_PATH" ]]; then
+          mode_args=(--lockfile "$APKO_LOCK_PATH" --offline --cache-dir "$APKO_CACHE_PATH" --require-strong-checksums)
+        fi
         /usr/bin/apko publish \
-          --ignore-signatures \
+          "${mode_args[@]}" \
           --arch "$APKO_ARCHS" \
           "${repos[@]+"${repos[@]}"}" \
           "$APKO_CONFIG_PATH" "${tags[@]}" | tee "$APKO_OUT_DIR/publish.digest"
@@ -215,6 +244,8 @@ runs:
           -e APKO_ARCHS \
           -e APKO_CONFIG_PATH="${config_dir}/${config_file}" \
           -e APKO_OUT_DIR="$out_dir" \
+          -e APKO_LOCK_PATH="$lock_path" \
+          -e APKO_CACHE_PATH="$cache_dir" \
           "$APKO_SANDBOX" -c "$apko_script"
 
         ref="$(tail -n 1 "${out_dir}/publish.digest")"

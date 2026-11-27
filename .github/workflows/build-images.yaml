@@ -234,8 +234,8 @@ jobs:
 
   build:
     name: build (${{ matrix.image }}, ${{ matrix.builder }})
-    needs: [plan, packages]
-    if: ${{ always() && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.has_builds == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
+    needs: [plan, fetch-apks, packages]
+    if: ${{ always() && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.has_builds == 'true' && (needs.fetch-apks.result == 'success' || needs.fetch-apks.result == 'skipped') && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -284,6 +284,13 @@ jobs:
             exit 1
           fi
 
+      - name: Download APK cache
+        if: matrix.lockfile != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: apk-cache
+          path: ${{ runner.temp }}/apk-cache
+
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -328,6 +335,8 @@ jobs:
           set: ${{ matrix.set }}
           config: ${{ matrix.config }}
           repositories: ${{ steps.stage.outputs.repositories }}
+          lockfile: ${{ matrix.lockfile }}
+          cache_dir: ${{ matrix.lockfile != '' && format('{0}/apk-cache', runner.temp) || '' }}
           importpath: ${{ matrix.importpath }}
           ko_config: ${{ matrix.ko_config }}
           ldflags: ${{ matrix.ldflags }}
@@ -344,8 +353,8 @@ jobs:
 
   publish:
     name: publish (${{ matrix.id }})
-    needs: [plan, packages]
-    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_publish == 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
+    needs: [plan, fetch-apks, packages]
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_publish == 'true' && (needs.fetch-apks.result == 'success' || needs.fetch-apks.result == 'skipped') && (needs.packages.result == 'success' || needs.packages.result == 'skipped') }}
     environment: release
     strategy:
       fail-fast: false
@@ -397,6 +406,13 @@ jobs:
             exit 1
           fi
 
+      - name: Download APK cache
+        if: matrix.lockfile != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: apk-cache
+          path: ${{ runner.temp }}/apk-cache
+
       - name: Download APK artifacts
         if: matrix.needs_packages != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -447,6 +463,8 @@ jobs:
           archs: ${{ matrix.archs }}
           config: ${{ matrix.config }}
           repositories: ${{ steps.stage.outputs.repositories }}
+          lockfile: ${{ matrix.lockfile }}
+          cache_dir: ${{ matrix.lockfile != '' && format('{0}/apk-cache', runner.temp) || '' }}
           arch: ${{ matrix.arch }}
           mode: ${{ matrix.mode }}
           context: ${{ matrix.context }}

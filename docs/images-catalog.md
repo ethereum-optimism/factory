@@ -396,6 +396,13 @@ The job fails, listing every problem, when:
 Local packages (`local: true`) are skipped. Untrusted runs fetch `x86_64`
 entries only. The plan fails when a lock file is missing from the checkout.
 
+An apko variant with a `lockfile` builds and publishes from the `apk-cache`
+artifact with `apko --lockfile --offline --cache-dir --require-strong-checksums`
+instead of resolving packages from the network: every package is checked
+against the sha256 in the lock, and keys come from the lock. Untrusted builds
+run apko in a container without network. A variant with a `lockfile` cannot
+use `needs_packages` yet; the plan rejects that combination.
+
 Example:
 
 ```json

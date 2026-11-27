@@ -299,6 +299,8 @@ def validate_image($n; $pkgs):
             then error("image \($n): apko config smoke.verify_version must be boolean") else . end)
        | (if any($cfgs[]; .lockfile != "" and (.lockfile | lockfile_path_ok | not))
             then error("image \($n): apko lockfile must be a relative path without .. using [A-Za-z0-9._/-]") else . end)
+       | (if any($cfgs[]; .lockfile != "") and (.builders.apko.needs_packages | length) > 0
+            then error("image \($n): an apko lockfile with needs_packages is not supported yet; local packages need build-time digests") else . end)
        | (if any(.builders.apko.needs_packages[]; is_one_of(.; $pkgs) | not)
             then error("image \($n): needs_packages must name entries in packages") else . end))
     else . end
@@ -1018,6 +1020,7 @@ main() {
                       set: "",
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
+                      lockfile: $v.lockfile,
                       suffix: $v.tag_suffix,
                       has_smoke: has_smoke($v.smoke),
                       smoke_commands: ($v.smoke.commands | tojson),
@@ -1071,6 +1074,7 @@ main() {
                       set: "",
                       config: $v.config,
                       needs_packages: ($i.builders.apko.needs_packages | join(",")),
+                      lockfile: $v.lockfile,
                       suffix: $v.tag_suffix,
                       sha_tag: sha_tag_for($m; $i; "apko"; $ctx; $v.tag_suffix),
                       ref_tag: ref_tag_for($m; $i; "apko"; $ctx; $v.tag_suffix),

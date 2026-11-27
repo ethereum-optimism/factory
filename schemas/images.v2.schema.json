@@ -495,7 +495,7 @@
         },
         "lockfile": {
           "type": "string",
-          "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job. Requires apk_registry. Applies to config; with configs, set lockfile on each entry."
+          "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job, and the variant builds and publishes offline from them. Requires apk_registry. Not yet supported with needs_packages. Applies to config; with configs, set lockfile on each entry."
         },
         "configs": {
           "type": "array",
@@ -546,7 +546,7 @@
               },
               "lockfile": {
                 "type": "string",
-                "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job. Requires apk_registry."
+                "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job, and the variant builds and publishes offline from them. Requires apk_registry. Not yet supported with needs_packages."
               }
             }
           }

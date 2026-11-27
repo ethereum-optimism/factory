@@ -1747,7 +1747,6 @@ write_lock_catalog() {
     "gadget": {
       "builders": {
         "apko": {
-          "needs_packages": ["stack"],
           "configs": [
             {"config": "apko/gadget.yaml", "tag_suffix": "", "lockfile": "${gadget_lock}"},
             {"config": "apko/gadget-dev.yaml", "tag_suffix": "-dev", "lockfile": "apko/gadget-dev.lock.json"}
@@ -1775,8 +1774,12 @@ assert_json "$fetch" '.identity' "abc/def"
 assert_json "$fetch" '.redirect_hosts | join(",")' "*.storage.example.net"
 assert_json "$fetch" '.archs | length' "0"
 
+assert_json "$(out_value "$OUT" publish_matrix)" '[.[] | select(.image == "gadget") | .lockfile] | join(",")' "apko/gadget.lock.json,apko/gadget-dev.lock.json"
+assert_json "$(out_value "$OUT" publish_matrix)" '.[] | select(.image == "plain") | .lockfile' ""
+
 run_plan lock_untrusted lock.json TRUSTED=false
 assert_json "$(out_value "$OUT" apk_fetch)" '.archs | join(",")' "x86_64"
+assert_json "$(out_value "$OUT" build_matrix)" '[.[] | select(.image == "gadget") | .lockfile] | join(",")' "apko/gadget.lock.json,apko/gadget-dev.lock.json"
 
 write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "/org/"},' apko/gadget.lock.json anon.json
 run_plan lock_anonymous anon.json TRUSTED=true
@@ -1803,6 +1806,8 @@ write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "
 expect_plan_error lock_unknown_field unknown.json "apk_registry: unknown field allow" TRUSTED=true
 printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"images":{"x":{"builders":{"apko":{"lockfile":"a.lock.json","configs":[{"config":"apko/x.yaml"}]}}}}}' > both.json
 expect_plan_error lock_both_forms both.json "builders.apko.lockfile applies to the single config form" TRUSTED=true
+printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"packages":{"stack":{}},"images":{"x":{"builders":{"apko":{"lockfile":"apko/gadget.lock.json","needs_packages":["stack"]}}}}}' > local.json
+expect_plan_error lock_with_local_packages local.json "an apko lockfile with needs_packages is not supported yet" TRUSTED=true
 
 popd >/dev/null
 
