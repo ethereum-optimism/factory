@@ -17,10 +17,10 @@ runs:
       id: install
       shell: bash
       env:
-        VERSION: v1.5.3-op.2
-        SHA256_LINUX_AMD64: 1be6bc79e85d9e27f396df2e1f337438bde91eadf74775594ba757173819a302
-        SHA256_LINUX_ARM64: fb7b09279f97f97cffcf9240c7b5a0f0417d76a8ce1bf571da8c42459cd050a7
-        SHA256_DARWIN_ARM64: 278d5b894bdbab9d3409475d7523b326c27e508bf56518234e81ed5536bc0e00
+        VERSION: v1.5.3-op.5
+        SHA256_LINUX_AMD64: 5ca51165ef781e6ef513a00342b163bd81b979142765be3d26c45eb9671a63d4
+        SHA256_LINUX_ARM64: 595945db79f83324a21de0472cf9bcd834a492d5d0cf3d22495ed527894d1e17
+        SHA256_DARWIN_ARM64: dd284a0bad72f2f9e5d5bda9d081b04966e19575c98fcf3a33f2f9fa1e77e599
       run: |
         set -euo pipefail
         case "${RUNNER_OS}/${RUNNER_ARCH}" in
