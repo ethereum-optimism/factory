@@ -1725,4 +1725,85 @@ reject_versioned bad_repository '.images.plain.repository = "Group/Plain"' 'repo
 reject_versioned bad_version '.images.plain.version = "v1/2"' 'version may only contain'
 expect_plan_error bad_build_date "$versioned" 'BUILD_DATE must be YYYYMMDD' TRUSTED=true BUILD_DATE=2026-11-27
 
+# Lock files planned for fetch-apks.
+lock_dir="$TEST_DIR/locks"
+mkdir -p "$lock_dir/apko" "$lock_dir/melange"
+pushd "$lock_dir" >/dev/null
+echo '{}' > apko/gadget.lock.json
+echo '{}' > apko/gadget-dev.lock.json
+echo '{}' > melange/stack.lock.json
+
+write_lock_catalog() {
+  local registry="$1" gadget_lock="${2:-apko/gadget.lock.json}"
+  cat > "$3" <<JSON
+{
+  "version": 2,
+  "registry": "registry.example.invalid/images",
+  ${registry}
+  "packages": {
+    "stack": {"config": "melange/stack.yaml", "archs": ["x86_64", "aarch64"], "env_lockfile": "melange/stack.lock.json"}
+  },
+  "images": {
+    "gadget": {
+      "builders": {
+        "apko": {
+          "needs_packages": ["stack"],
+          "configs": [
+            {"config": "apko/gadget.yaml", "tag_suffix": "", "lockfile": "${gadget_lock}"},
+            {"config": "apko/gadget-dev.yaml", "tag_suffix": "-dev", "lockfile": "apko/gadget-dev.lock.json"}
+          ]
+        }
+      }
+    },
+    "plain": {
+      "builders": {"apko": {"config": "apko/plain.yaml"}}
+    }
+  }
+}
+JSON
+}
+
+registry_block='"apk_registry": {"host": "apk.example.dev", "path_prefix": "/org/", "chainguard_identity": "abc/def", "redirect_hosts": ["*.storage.example.net"]},'
+write_lock_catalog "$registry_block" apko/gadget.lock.json lock.json
+run_plan lock_trusted lock.json TRUSTED=true
+assert_eq "$(out_value "$OUT" has_apk_fetch)" "true" "has_apk_fetch on a lock catalog"
+fetch=$(out_value "$OUT" apk_fetch)
+assert_json "$fetch" '.lockfiles | join(",")' "apko/gadget-dev.lock.json,apko/gadget.lock.json,melange/stack.lock.json"
+assert_json "$fetch" '.host' "apk.example.dev"
+assert_json "$fetch" '.path_prefix' "/org/"
+assert_json "$fetch" '.identity' "abc/def"
+assert_json "$fetch" '.redirect_hosts | join(",")' "*.storage.example.net"
+assert_json "$fetch" '.archs | length' "0"
+
+run_plan lock_untrusted lock.json TRUSTED=false
+assert_json "$(out_value "$OUT" apk_fetch)" '.archs | join(",")' "x86_64"
+
+write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "/org/"},' apko/gadget.lock.json anon.json
+run_plan lock_anonymous anon.json TRUSTED=true
+assert_json "$(out_value "$OUT" apk_fetch)" '.identity' ""
+assert_json "$(out_value "$OUT" apk_fetch)" '.redirect_hosts | length' "0"
+
+run_plan no_locks "$(write_v2_catalog "$TEST_DIR/no-locks.json"; echo "$TEST_DIR/no-locks.json")" TRUSTED=true
+assert_eq "$(out_value "$OUT" has_apk_fetch)" "false" "has_apk_fetch without lock files"
+assert_eq "$(out_value "$OUT" apk_fetch)" "{}" "apk_fetch without lock files"
+
+write_lock_catalog "" apko/gadget.lock.json no-registry.json
+expect_plan_error lock_without_registry no-registry.json "need an apk_registry block" TRUSTED=true
+write_lock_catalog "$registry_block" apko/missing.lock.json missing.json
+expect_plan_error lock_missing missing.json "lock file not found: apko/missing.lock.json" TRUSTED=true
+write_lock_catalog "$registry_block" ../outside.lock.json traversal.json
+expect_plan_error lock_traversal traversal.json "apko lockfile must be a relative path" TRUSTED=true
+write_lock_catalog '"apk_registry": {"host": "https://apk.example.dev", "path_prefix": "/org/"},' apko/gadget.lock.json bad-host.json
+expect_plan_error lock_bad_host bad-host.json "apk_registry.host must be a lowercase DNS name" TRUSTED=true
+write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "org"},' apko/gadget.lock.json bad-prefix.json
+expect_plan_error lock_bad_prefix bad-prefix.json "apk_registry.path_prefix must start and end with /" TRUSTED=true
+write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "/org/", "redirect_hosts": ["*"]},' apko/gadget.lock.json bad-redirect.json
+expect_plan_error lock_bad_redirect bad-redirect.json "apk_registry.redirect_hosts must be" TRUSTED=true
+write_lock_catalog '"apk_registry": {"host": "apk.example.dev", "path_prefix": "/org/", "allow": true},' apko/gadget.lock.json unknown.json
+expect_plan_error lock_unknown_field unknown.json "apk_registry: unknown field allow" TRUSTED=true
+printf '%s' '{"version":2,"apk_registry":{"host":"apk.example.dev","path_prefix":"/org/"},"images":{"x":{"builders":{"apko":{"lockfile":"a.lock.json","configs":[{"config":"apko/x.yaml"}]}}}}}' > both.json
+expect_plan_error lock_both_forms both.json "builders.apko.lockfile applies to the single config form" TRUSTED=true
+
+popd >/dev/null
+
 echo "plan-images tests passed"

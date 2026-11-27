@@ -56,6 +56,12 @@ outputs:
   smoke_matrix:
     description: 'JSON array of smoke legs, one per image, builder variant, and architecture, pulling the pushed digest.'
     value: ${{ steps.plan.outputs.smoke_matrix }}
+  has_apk_fetch:
+    description: '"true" when planned images or packages name lock files to fetch.'
+    value: ${{ steps.plan.outputs.has_apk_fetch }}
+  apk_fetch:
+    description: 'JSON request for actions/fetch-apks: registry host, path prefix, redirect hosts, identity, lock files and architectures. "{}" when nothing is fetched.'
+    value: ${{ steps.plan.outputs.apk_fetch }}
 
 runs:
   using: composite

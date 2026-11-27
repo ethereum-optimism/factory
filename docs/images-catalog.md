@@ -85,6 +85,7 @@ the publish job completed.
 | `shared_paths` | no | Changed-file patterns that plan every image and package. |
 | `packages` | no | Melange packages (see below). Names match `^[a-z0-9][a-z0-9._-]*$`. |
 | `hooks.pre_build` | no | Repository script run during planning. Its stdout must be `KEY=VALUE` lines, and any other line fails the plan. It runs without `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, `GITHUB_STEP_SUMMARY`, and `GITHUB_STATE` set. The pairs are added to package build environments and to docker build arguments. |
+| `apk_registry` | with lock files | APK registry that lock files may reference. See Lock files. |
 | `images` | yes | Object keyed by image name. Names match `^[a-z0-9][a-z0-9._-]*$`. |
 
 Patterns: a pattern ending in `/**` matches any file below that directory. Any
@@ -163,6 +164,7 @@ architecture.
 | `cargo_profile` | `{}` | `{trusted, untrusted}` profile names exported to pipelines. |
 | `build_env` | `""` | `KEY=VALUE` lines added to the melange environment. |
 | `build_version` | `""` | Exported as `GIT_VERSION`. Release tags override it. |
+| `env_lockfile` | `""` | melange environment lock file written by `melange lock`. See Lock files. |
 
 A `source` with `repository` set to the calling repository, `path` `"."`, and no `ref` is the calling repository checkout. It plans as an omitted `source`, and its `source_submodules` maps to `submodules`. Legacy v1 catalogs follow the same rule. A `source` with `path` `"."` for any other repository, or with a `ref` on the calling repository, is checked out under `.package-sources/<package>` with `root` set, so the checkout never replaces the calling repository's files. `root: false` with `path` `"."` is rejected.
 
@@ -210,10 +212,12 @@ the same way a Dockerfile pulls `FROM`.
 `apko`:
 
 - `needs_packages`: package names whose APK repositories the build uses.
-- `configs`: variants, each `{config, tag_suffix, smoke, allow_packages}`. A
+- `configs`: variants, each `{config, tag_suffix, smoke, allow_packages, lockfile}`. A
   variant with an empty `tag_suffix` is the default variant. Every variant is
   smoke tested against its own digest. Without `configs`, `config` (default
   `apko/<image>.yaml`) is used. See Variants.
+- `lockfile`: apko lock file for `config`, written by `apko lock`. With
+  `configs`, set `lockfile` on each variant instead. See Lock files.
 - `tag_prefix`: see Tags.
 - `archs`: `amd64`, `arm64`. Overrides the image `archs` for this builder only.
 - `smoke`: same fields as the image `smoke`. Overrides it for this builder only, see Smoke per builder.
@@ -362,6 +366,47 @@ Both variants inherit `foo --version`. A variant can use its own command:
 A variant that needs a package from the guard list names it in
 `allow_packages`, for example `"allow_packages": ["openssl"]`.
 
+## Lock files
+
+An apko variant's `lockfile` and a package's `env_lockfile` name lock files in
+the calling repository. When planned images or packages name lock files, the
+`fetch-apks` job downloads every package and repository index they pin into an
+apko cache directory and uploads it as the `apk-cache` artifact. The lock files
+are read as data, and nothing from the calling repository runs in that job.
+
+`apk_registry` is required when any lock file is set:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `host` | yes | Registry host name, without scheme, port, or path. |
+| `path_prefix` | yes | Path every locked URL must start with, beginning and ending with `/`. Matched by whole path segments. |
+| `chainguard_identity` | no | Chainguard identity the job assumes with its OIDC token. The token is sent only to `host`. Omit it for an anonymous registry. |
+| `redirect_hosts` | no | Hosts the registry may redirect package downloads to, such as blob storage. A leading `*.` matches subdomains only. Default `[]`: redirects off `host` are refused. |
+
+The job fails, listing every problem, when:
+
+- a non-local package URL or a remote repository index URL is not https on
+  `host` under `path_prefix`, or has a port, credentials, query, or `..`;
+- a non-local package has no whole-file `sha256` in its lock (`apko lock` from
+  op-apko writes it), or two lock files pin one URL to different digests;
+- a lock file records `unverified_indexes`;
+- a downloaded package does not match its `sha256`, or a download is redirected
+  off `host` to a host that `redirect_hosts` does not name, or redirected twice.
+
+Local packages (`local: true`) are skipped. Untrusted runs fetch `x86_64`
+entries only. The plan fails when a lock file is missing from the checkout.
+
+Example:
+
+```json
+"apk_registry": {
+  "host": "apk.example.dev",
+  "path_prefix": "/example-org/",
+  "chainguard_identity": "0123456789abcdef0123456789abcdef01234567/0123456789abcdef",
+  "redirect_hosts": ["*.storage.example.net"]
+}
+```
+
 ## Tags
 
 For a builder, the tag prefix is:
@@ -478,7 +523,9 @@ Untrusted runs:
 - build `amd64` images locally and smoke test them;
 - build `x86_64` packages and the amd64 image builds on the runner their
   `runner_profile` selects;
-- run with `contents: read` only, and never reference secrets or an OIDC token.
+- run with `contents: read` only, and never reference secrets or an OIDC
+  token, except the `fetch-apks` job, which may request an OIDC token to
+  authenticate to `apk_registry` and runs no code from the calling repository.
 
 Trusted runs:
 

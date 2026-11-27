@@ -1,0 +1,63 @@
+name: 'Fetch APKs'
+description: >
+  Download every package and repository index pinned by the given apko and
+  melange lock files into an apko cache directory, for builds that run with
+  --lockfile --offline --cache-dir. Every non-local URL must be https on the
+  configured registry host under its path prefix, every package must carry a
+  whole-file sha256 in its lock and match it, and redirects are refused unless
+  they target redirect_hosts. When the request names a Chainguard identity,
+  the action installs the pinned chainctl, exchanges the job OIDC token for a
+  registry token and sends it only to the registry host. Lock files are read as
+  data; nothing from the caller repository is executed.
+
+inputs:
+  request:
+    description: >
+      JSON object from plan-images: host, path_prefix, redirect_hosts,
+      identity, lockfiles (paths relative to the workspace) and archs.
+    required: true
+  cache_dir:
+    description: 'Directory that receives the apko cache layout.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install chainctl
+      if: fromJSON(inputs.request).identity != ''
+      uses: ./.factory/actions/install-chainctl
+
+    - name: Fetch and verify locked APKs
+      shell: bash
+      env:
+        REQUEST: ${{ inputs.request }}
+        CACHE_DIR: ${{ inputs.cache_dir }}
+      run: |
+        set -euo pipefail
+        request_file="$(mktemp "${RUNNER_TEMP}/fetch-apks-request.XXXXXX")"
+        printf '%s' "$REQUEST" > "$request_file"
+        identity="$(jq -r '.identity // ""' "$request_file")"
+        host="$(jq -r '.host // ""' "$request_file")"
+        if [ -n "$identity" ]; then
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::apk_registry.chainguard_identity is set but this run has no OIDC token; pull requests from forks cannot fetch from an authenticated registry, and the caller must grant id-token: write" >&2
+            exit 1
+          fi
+          chainctl auth login --identity "$identity"
+          chainctl auth login --identity "$identity" --audience "$host"
+          token="$(chainctl auth token --audience "$host")"
+          if [ -z "$token" ]; then
+            echo "::error::chainctl returned no token for $host" >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          export APK_REGISTRY_TOKEN="$token"
+        fi
+        mkdir -p "$CACHE_DIR"
+        python3 -I "${GITHUB_ACTION_PATH}/fetch_apks.py" \
+          --request "$request_file" \
+          --workspace "$GITHUB_WORKSPACE" \
+          --cache-dir "$CACHE_DIR"
+        if [ -n "$identity" ]; then
+          chainctl auth logout || true
+        fi

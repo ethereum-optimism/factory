@@ -108,3 +108,91 @@ jobs:
             exit 1
           fi
           echo "apko in the sandbox: $actual"
+
+  fetch-apks:
+    name: fetch-apks verifies hashes and the allowlist
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          path: .factory
+          persist-credentials: false
+
+      - name: Write tampered and off-allowlist lock files
+        run: |
+          set -euo pipefail
+          jq '.contents.packages[0].sha256 = "sha256:" + ("0" * 64)' test/fixtures/apko/tiny.lock.json > tampered.lock.json
+          jq 'del(.contents.packages[0].sha256)' test/fixtures/apko/tiny.lock.json > unpinned.lock.json
+
+      - name: Fetch the fixture lock
+        uses: ./actions/fetch-apks
+        with:
+          request: '{"host":"packages.wolfi.dev","path_prefix":"/os/","redirect_hosts":[],"identity":"","lockfiles":["test/fixtures/apko/tiny.lock.json"],"archs":["x86_64"]}'
+          cache_dir: ${{ runner.temp }}/good
+
+      - name: Fetch a tampered lock
+        id: tampered
+        continue-on-error: true
+        uses: ./actions/fetch-apks
+        with:
+          request: '{"host":"packages.wolfi.dev","path_prefix":"/os/","redirect_hosts":[],"identity":"","lockfiles":["tampered.lock.json"],"archs":["x86_64"]}'
+          cache_dir: ${{ runner.temp }}/tampered
+
+      - name: Fetch a lock without sha256
+        id: unpinned
+        continue-on-error: true
+        uses: ./actions/fetch-apks
+        with:
+          request: '{"host":"packages.wolfi.dev","path_prefix":"/os/","redirect_hosts":[],"identity":"","lockfiles":["unpinned.lock.json"],"archs":["x86_64"]}'
+          cache_dir: ${{ runner.temp }}/unpinned
+
+      - name: Fetch outside the allowed prefix
+        id: off_prefix
+        continue-on-error: true
+        uses: ./actions/fetch-apks
+        with:
+          request: '{"host":"packages.wolfi.dev","path_prefix":"/other/","redirect_hosts":[],"identity":"","lockfiles":["test/fixtures/apko/tiny.lock.json"],"archs":["x86_64"]}'
+          cache_dir: ${{ runner.temp }}/off-prefix
+
+      - name: Check outcomes and the cache layout
+        env:
+          TAMPERED: ${{ steps.tampered.outcome }}
+          UNPINNED: ${{ steps.unpinned.outcome }}
+          OFF_PREFIX: ${{ steps.off_prefix.outcome }}
+          GOOD_DIR: ${{ runner.temp }}/good
+        run: |
+          set -euo pipefail
+          for entry in "tampered:$TAMPERED" "unpinned:$UNPINNED" "off-prefix:$OFF_PREFIX"; do
+            if [ "${entry#*:}" != "failure" ]; then
+              echo "::error::fetch-apks ${entry%%:*} case was ${entry#*:}, expected failure" >&2
+              exit 1
+            fi
+          done
+          repo="${GOOD_DIR}/https%3A%2F%2Fpackages.wolfi.dev%2Fos/x86_64"
+          jq -r '.contents.packages[] | [(.url | split("/") | last), (.sha256 | ltrimstr("sha256:"))] | @tsv' \
+            test/fixtures/apko/tiny.lock.json | while IFS=$'\t' read -r file digest; do
+            echo "${digest}  ${repo}/${file}" | sha256sum -c -
+          done
+          ls "${repo}/APKINDEX/"*.tar.gz
+
+      - name: Install op-apko
+        uses: ./actions/install-op-apko
+
+      - name: Build the fixture offline from the fetched cache
+        env:
+          GOOD_DIR: ${{ runner.temp }}/good
+        run: |
+          set -euo pipefail
+          out_dir="$(mktemp -d "$RUNNER_TEMP/offline.XXXXXX")"
+          op-apko build --arch amd64 --offline --require-strong-checksums \
+            --lockfile test/fixtures/apko/tiny.lock.json --cache-dir "$GOOD_DIR" \
+            test/fixtures/apko/tiny.yaml example.invalid/fetch-apks:selftest "${out_dir}/image.tar"
+          test -s "${out_dir}/image.tar"

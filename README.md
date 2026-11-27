@@ -78,7 +78,17 @@ The run is either trusted or untrusted, decided once by
   branches. These runs plan only the affected images, build `amd64` images and
   `x86_64` packages on the runner their `runner_profile` selects, and smoke test
   them. They have `contents: read` only and no access to secrets or an OIDC
-  token.
+  token, except the `fetch-apks` job described below.
+
+When the catalog names lock files, the `fetch-apks` job
+(`actions/fetch-apks`) downloads the packages and indexes they pin from the
+catalog's `apk_registry` into an apko cache layout, verifies every package
+against the whole-file sha256 in its lock, and uploads the result as the
+`apk-cache` artifact. It is the only job outside the `release` environment that
+may hold `id-token: write`, used to exchange the OIDC token for a registry token
+when `apk_registry.chainguard_identity` is set (chainctl from
+`actions/install-chainctl`, pinned by sha256). It reads lock files as data and
+runs only factory code. See Lock files in the catalog reference.
 
 The planner is `actions/plan-images`. The step actions are
 `actions/build-packages`, `actions/stage-packages`, `actions/build-image`,
@@ -90,7 +100,8 @@ mounted read-only over `/usr/bin/apko`. The self-test workflow
 `.github/workflows/build-images-selftest.yaml` runs the untrusted path on every
 pull request against the fixtures in `test/fixtures/`, and
 `scripts/lint-untrusted-permissions.sh` checks the permission and credential
-rules of the workflow and the actions it reaches.
+rules of the workflow and the actions it reaches, including that the
+`fetch-apks` job runs no repository script or action.
 
 ## GoReleaser release
 

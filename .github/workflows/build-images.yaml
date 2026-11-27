@@ -41,6 +41,8 @@ jobs:
       publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
       manifest_matrix: ${{ steps.plan.outputs.manifest_matrix }}
       smoke_matrix: ${{ steps.plan.outputs.smoke_matrix }}
+      has_apk_fetch: ${{ steps.plan.outputs.has_apk_fetch }}
+      apk_fetch: ${{ steps.plan.outputs.apk_fetch }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -93,6 +95,69 @@ jobs:
         with:
           config: ${{ inputs.config }}
           trusted: ${{ steps.trust.outputs.trusted }}
+
+  fetch-apks:
+    name: fetch-apks
+    needs: plan
+    if: needs.plan.outputs.has_apk_fetch == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout caller repository
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          persist-credentials: false
+
+      - name: Require the factory pin
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+          FACTORY_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FACTORY_SHA" ] || [ -z "$FACTORY_REPOSITORY" ]; then
+            echo "::error::job.workflow_sha and job.workflow_repository are required to locate the factory actions" >&2
+            exit 1
+          fi
+
+      - name: Checkout factory actions
+        uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e # v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .factory
+          persist-credentials: false
+
+      - name: Verify factory checkout
+        env:
+          FACTORY_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .factory rev-parse HEAD)"
+          if [ "$actual" != "$FACTORY_SHA" ]; then
+            echo "::error::factory checkout is $actual, expected $FACTORY_SHA" >&2
+            exit 1
+          fi
+
+      - name: Fetch locked APKs
+        uses: ./.factory/actions/fetch-apks
+        with:
+          request: ${{ needs.plan.outputs.apk_fetch }}
+          cache_dir: ${{ runner.temp }}/apk-cache
+
+      - name: Upload APK cache
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apk-cache
+          path: ${{ runner.temp }}/apk-cache
+          if-no-files-found: error
+          retention-days: 1
 
   packages:
     name: packages (${{ matrix.package }}, ${{ matrix.arch }})
@@ -618,7 +683,7 @@ jobs:
 
   result:
     name: result
-    needs: [plan, packages, build, publish, publish-manifest, smoke]
+    needs: [plan, fetch-apks, packages, build, publish, publish-manifest, smoke]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     permissions: {}
@@ -626,6 +691,7 @@ jobs:
       - name: Aggregate job results
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
+          FETCH_RESULT: ${{ needs.fetch-apks.result }}
           PACKAGES_RESULT: ${{ needs.packages.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
@@ -639,7 +705,7 @@ jobs:
           if [ "$PLAN_RESULT" != "success" ]; then
             failures+=("plan: $PLAN_RESULT")
           fi
-          for entry in "packages:$PACKAGES_RESULT" "build:$BUILD_RESULT" "publish:$PUBLISH_RESULT" \
+          for entry in "fetch-apks:$FETCH_RESULT" "packages:$PACKAGES_RESULT" "build:$BUILD_RESULT" "publish:$PUBLISH_RESULT" \
                        "publish-manifest:$MANIFEST_RESULT" "smoke:$SMOKE_RESULT"; do
             name="${entry%%:*}"
             value="${entry#*:}"

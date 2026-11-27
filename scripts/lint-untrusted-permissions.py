@@ -7,7 +7,13 @@ Every job in the build-images workflow must be one of:
   needs.plan.outputs.trusted == 'true';
 - unprivileged: permissions is exactly {contents: read} (or {} for the result
   job), it has no environment, and neither the job nor any composite action it
-  reaches mentions a credential or login primitive.
+  reaches mentions a credential or login primitive;
+- the fetch-apks job: permissions is exactly {contents: read, id-token: write},
+  it has no environment, it uses only the fetch-apks and install-chainctl
+  factory actions plus checkout, upload-artifact and harden-runner, and no run
+  script in the job or those actions executes code from the caller repository.
+
+Only the fetch-apks job may reach the fetch-apks and install-chainctl actions.
 
 Every job that reaches the smoke-test action must check out the caller
 repository.
@@ -34,6 +40,22 @@ FORBIDDEN_IN_UNPRIVILEGED = [
     "gcloud",
     "secrets.",
 ]
+FORBIDDEN_IN_FETCH = [
+    "google-github-actions/",
+    "docker/login-action",
+    "gcloud",
+    "secrets.",
+]
+FETCH_JOB = "fetch-apks"
+FETCH_PERMISSIONS = {"contents": "read", "id-token": "write"}
+FETCH_ACTIONS = {"fetch-apks", "install-chainctl"}
+FETCH_EXTERNAL = ("actions/checkout@", "actions/upload-artifact@", "step-security/harden-runner@")
+FACTORY_ACTION = re.compile(r"^\./\.factory/actions/([A-Za-z0-9_-]+)$")
+INTERPRETER = re.compile(
+    r"(?:^|[\s;&|(`])(bash|sh|zsh|python3?|node|perl|ruby|source|eval|make|npm|npx|docker)\b((?:\s+-[A-Za-z]+)*)(?:\s+(\S+))?"
+)
+DOT_SOURCE = re.compile(r"(?:^|[;&|]\s*)\.\s+\S")
+RELATIVE_EXEC = re.compile(r"(?:^|[\s;&|(`])\./(?!\.factory/)")
 SHA_PIN = re.compile(r"^[0-9a-f]{40}$")
 PRIVILEGED_IF = "needs.plan.outputs.trusted == 'true'"
 LOCAL_ACTION = re.compile(r"^\./(?:\.factory/)?actions/([A-Za-z0-9_-]+)$")
@@ -148,6 +170,98 @@ def check_action_contents(root, names, errors):
                 errors.append(f"{rel}: contains a :latest image reference")
 
 
+def run_scripts(node):
+    scripts = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "run" and isinstance(value, str):
+                scripts.append(value)
+            else:
+                scripts.extend(run_scripts(value))
+    elif isinstance(node, list):
+        for item in node:
+            scripts.extend(run_scripts(item))
+    return scripts
+
+
+def repo_code_lines(script):
+    """Return the lines of a run script that may execute caller repository code."""
+    offending = []
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if RELATIVE_EXEC.search(stripped) or DOT_SOURCE.search(stripped):
+            offending.append(stripped)
+            continue
+        for match in INTERPRETER.finditer(stripped):
+            name, target = match.group(1), match.group(3) or ""
+            if name in ("docker", "eval", "make", "npm", "npx", "source"):
+                offending.append(stripped)
+                break
+            if not target.strip("\"'").startswith(("${GITHUB_ACTION_PATH}", "$GITHUB_ACTION_PATH")):
+                offending.append(stripped)
+                break
+    return offending
+
+
+def uses_values(node):
+    values = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "uses" and isinstance(value, str):
+                values.append(value)
+            else:
+                values.extend(uses_values(value))
+    elif isinstance(node, list):
+        for item in node:
+            values.extend(uses_values(item))
+    return values
+
+
+def check_fetch_uses(where, value, errors):
+    if value.startswith("./"):
+        match = FACTORY_ACTION.match(value)
+        if not match:
+            errors.append(f"{where}: fetch-apks uses a repository action or a path outside .factory: {value}")
+        elif match.group(1) not in FETCH_ACTIONS:
+            errors.append(f"{where}: fetch-apks may only use the {sorted(FETCH_ACTIONS)} factory actions, found {value}")
+        return
+    if value.startswith("docker://") or not value.startswith(FETCH_EXTERNAL):
+        errors.append(f"{where}: fetch-apks may only use {', '.join(FETCH_EXTERNAL)} externally, found {value}")
+
+
+def check_fetch_job(root, rel, where, job, names, errors):
+    if job.get("environment") is not None:
+        errors.append(f"{where}: fetch-apks must not declare an environment")
+    if job.get("permissions") != FETCH_PERMISSIONS:
+        errors.append(f"{where}: fetch-apks permissions must be exactly {FETCH_PERMISSIONS}, found {job.get('permissions')}")
+    if "secrets." in json.dumps(job, sort_keys=True):
+        errors.append(f"{where}: fetch-apks references secrets")
+    for value in uses_values(job):
+        check_fetch_uses(where, value, errors)
+    for script in run_scripts(job):
+        for line in repo_code_lines(script):
+            errors.append(f"{where}: fetch-apks run step may execute repository code: {line}")
+    for name in sorted(names):
+        for path in action_files(root, name) or []:
+            arel = os.path.relpath(path, root)
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+            for token in FORBIDDEN_IN_FETCH:
+                if token in text:
+                    errors.append(f"{where}: action {name} references '{token}' ({arel})")
+            if not path.endswith((".yml", ".yaml")):
+                continue
+            document = load_yaml(path)
+            walk_uses(document, arel, errors)
+            for value in uses_values(document):
+                check_fetch_uses(arel, value, errors)
+            for script in run_scripts(document):
+                for line in repo_code_lines(script):
+                    errors.append(f"{arel}: run step reached from fetch-apks may execute repository code: {line}")
+
+
 def check_checkout_order(where, job, errors):
     """A caller checkout (no path) must precede the factory checkout (path .factory).
 
@@ -197,6 +311,12 @@ def check_job_workflow(root, path, errors):
         check_checkout_order(where, job, errors)
         names = reached_actions(root, job, errors)
         check_smoke_caller(where, job, names, errors)
+        if job_id == FETCH_JOB:
+            check_fetch_job(root, rel, where, job, names, errors)
+            walk_uses(job, where, errors)
+            continue
+        for name in sorted(names & FETCH_ACTIONS):
+            errors.append(f"{where}: only the fetch-apks job may reach actions/{name}")
         permissions = job.get("permissions")
         environment = job.get("environment")
         condition = str(job.get("if", ""))
