@@ -288,7 +288,7 @@ runs:
         ko "${ko_args[@]}" "$KO_IMPORTPATH" > "${out_dir}/publish.out"
 
         ref="$(tail -n 1 "${out_dir}/publish.out")"
-        if [[ "$ref" != "${KO_REPO}@sha256:"* ]]; then
+        if [[ "$ref" != "${KO_REPO}@sha256:"* && "$ref" != "${KO_REPO}:${KO_SHA_TAG}@sha256:"* ]]; then
           echo "::error::ko did not print a published reference for ${KO_REPO}; got: '$ref'" >&2
           exit 1
         fi
