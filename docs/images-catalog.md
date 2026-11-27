@@ -407,7 +407,24 @@ the calling repository. When planned images or packages name lock files, the
 apko cache directory and uploads it as the `apk-cache` artifact. The lock files
 are read as data, and nothing from the calling repository runs in that job.
 
-`apk_registry` is required when any lock file is set:
+`apk_registry` is required when any lock file is set. Setting it also turns
+on an allowlist check in the planner, on every run and for the whole catalog,
+not only the planned images. The plan fails, listing every violation, unless:
+
+- every `contents.repositories` and `contents.build_repositories` entry of every
+  apko config (after any `@label`) is a local path starting with `/` or `.`, or
+  an https URL on `host` under `path_prefix`, and no apko config uses `include`;
+- every repository of every melange config's build environment, main test
+  environment, and subpackage test environments is a local path or such a URL;
+- every lock file and environment lock file exists, is not marked
+  `unverified_indexes`, pins every non-local package to such a URL with a
+  whole-file `sha256`, and lists only such remote repositories.
+
+URLs with a port, credentials, query, fragment, backslash, encoded dot or slash,
+or a `.` or `..` segment are rejected. A melange config that is not in the
+checkout (a package built from another repository) fails the check.
+
+Fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |

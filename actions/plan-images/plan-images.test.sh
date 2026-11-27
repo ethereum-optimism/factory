@@ -1819,6 +1819,10 @@ pushd "$lock_dir" >/dev/null
 echo '{}' > apko/gadget.lock.json
 echo '{}' > apko/gadget-dev.lock.json
 echo '{}' > melange/stack.lock.json
+for cfg in apko/gadget.yaml apko/gadget-dev.yaml apko/plain.yaml apko/x.yaml; do
+  printf 'contents:\n  repositories:\n    - https://apk.example.dev/org\n  packages:\n    - base\n' > "$cfg"
+done
+printf 'package:\n  name: stack\nenvironment:\n  contents:\n    repositories:\n      - https://apk.example.dev/org/\n' > melange/stack.yaml
 
 write_lock_catalog() {
   local registry="$1" gadget_lock="${2:-apko/gadget.lock.json}"
@@ -1881,7 +1885,7 @@ assert_eq "$(out_value "$OUT" apk_fetch)" "{}" "apk_fetch without lock files"
 write_lock_catalog "" apko/gadget.lock.json no-registry.json
 expect_plan_error lock_without_registry no-registry.json "need an apk_registry block" TRUSTED=true
 write_lock_catalog "$registry_block" apko/missing.lock.json missing.json
-expect_plan_error lock_missing missing.json "lock file not found: apko/missing.lock.json" TRUSTED=true
+expect_plan_error lock_missing missing.json "lock file apko/missing.lock.json: not found" TRUSTED=true
 write_lock_catalog "$registry_block" ../outside.lock.json traversal.json
 expect_plan_error lock_traversal traversal.json "apko lockfile must be a relative path" TRUSTED=true
 write_lock_catalog '"apk_registry": {"host": "https://apk.example.dev", "path_prefix": "/org/"},' apko/gadget.lock.json bad-host.json
@@ -1898,6 +1902,52 @@ printf '%s' '{"version":2,"registry":"registry.example.invalid/images","apk_regi
 run_plan lock_with_local_packages local.json TRUSTED=true
 assert_json "$(out_value "$OUT" publish_matrix)" '.[0].lockfile + " " + .[0].needs_packages' "apko/gadget.lock.json stack"
 
+
+# apk_registry allowlist enforcement.
+write_lock_catalog "$registry_block" apko/gadget.lock.json enforce.json
+good_lock='{"contents":{"repositories":[{"name":"r","url":"https://apk.example.dev/org/x86_64/APKINDEX.tar.gz","architecture":"x86_64"}],"packages":[{"name":"base","url":"https://apk.example.dev/org/x86_64/base-1-r0.apk","sha256":"sha256:'"$(printf 'a%.0s' {1..64})"'","architecture":"x86_64"},{"name":"mine","version":"1-r0","architecture":"x86_64","local":true}]}}'
+printf '%s' "$good_lock" > apko/gadget.lock.json
+run_plan enforce_ok enforce.json TRUSTED=true
+grep -q 'every repository and locked URL is under https://apk.example.dev/org/' "$TEST_DIR/enforce_ok.log" || fail "enforcement success line missing"
+
+# expect_enforce_error <name> <message> <setup command...>
+expect_enforce_error() {
+  local name="$1" message="$2"
+  shift 2
+  cp apko/gadget.yaml apko/gadget.yaml.orig
+  cp melange/stack.yaml melange/stack.yaml.orig
+  cp apko/gadget.lock.json apko/gadget.lock.json.orig
+  "$@"
+  expect_plan_error "$name" enforce.json "$message" TRUSTED=true
+  mv apko/gadget.yaml.orig apko/gadget.yaml
+  mv melange/stack.yaml.orig melange/stack.yaml
+  mv apko/gadget.lock.json.orig apko/gadget.lock.json
+}
+
+set_repo() { printf 'contents:\n  repositories:\n    - %s\n' "$1" > apko/gadget.yaml; }
+set_env_repo() { printf 'environment:\n  contents:\n    repositories:\n      - %s\n' "$1" > melange/stack.yaml; }
+set_lock() { jq "$1" <<< "$good_lock" > apko/gadget.lock.json; }
+
+expect_enforce_error enforce_apko_host "repository https://packages.wolfi.dev/os is not on the apk_registry allowlist" set_repo https://packages.wolfi.dev/os
+expect_enforce_error enforce_apko_prefix "repository https://apk.example.dev/other is not on the apk_registry allowlist" set_repo https://apk.example.dev/other
+expect_enforce_error enforce_apko_segment "is not on the apk_registry allowlist" set_repo https://apk.example.dev/organisation
+expect_enforce_error enforce_apko_http "is not on the apk_registry allowlist" set_repo http://apk.example.dev/org
+expect_enforce_error enforce_apko_label "repository https://evil.example.net/org is not on the apk_registry allowlist" set_repo "'@extra https://evil.example.net/org'"
+expect_enforce_error enforce_apko_userinfo "is not on the apk_registry allowlist" set_repo https://x@apk.example.dev/org
+expect_enforce_error enforce_apko_traversal "is not on the apk_registry allowlist" set_repo https://apk.example.dev/org/../other
+expect_enforce_error enforce_apko_bare "is neither a URL nor a local path" set_repo packages.wolfi.dev/os
+expect_enforce_error enforce_melange "environment repository https://packages.wolfi.dev/os is not on the apk_registry allowlist" set_env_repo https://packages.wolfi.dev/os
+expect_enforce_error enforce_lock_package "package base url https://packages.wolfi.dev/os/x86_64/base-1-r0.apk is not on the apk_registry allowlist" set_lock '.contents.packages[0].url = "https://packages.wolfi.dev/os/x86_64/base-1-r0.apk"'
+expect_enforce_error enforce_lock_sha "package base has no whole-file sha256" set_lock 'del(.contents.packages[0].sha256)'
+expect_enforce_error enforce_lock_repo "repository https://packages.wolfi.dev/os/x86_64/APKINDEX.tar.gz is not on the apk_registry allowlist" set_lock '.contents.repositories[0].url = "https://packages.wolfi.dev/os/x86_64/APKINDEX.tar.gz"'
+expect_enforce_error enforce_lock_unverified "resolved from unverified repository indexes" set_lock '.unverified_indexes = true'
+expect_enforce_error enforce_missing_config "apko config apko/gadget.yaml: not found in the checkout" rm apko/gadget.yaml
+
+set_repo https://packages.wolfi.dev/os
+set_env_repo https://packages.wolfi.dev/os
+expect_plan_error enforce_count enforce.json "2 violation" TRUSTED=true
+printf 'contents:\n  repositories:\n    - https://apk.example.dev/org\n  packages:\n    - base\n' > apko/gadget.yaml
+printf 'package:\n  name: stack\nenvironment:\n  contents:\n    repositories:\n      - https://apk.example.dev/org/\n' > melange/stack.yaml
 popd >/dev/null
 
 # --- Smoke tests and smoke before publish ---------------------------------------------
