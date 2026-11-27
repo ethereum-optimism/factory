@@ -934,7 +934,13 @@ check_apk_registry() {
       and (test("[?#\\\\]|%2[eEfF]|%5[cC]|/\\.\\.?(/|$)|^https://[^/]*[@:]") | not);
     def remote: test("^[A-Za-z][A-Za-z0-9+.-]*://");
     def entry: if startswith("@") then (sub("^@[^ ]+ +"; "")) else . end;
+    def keyrings($what): .[] | select(type == "string") | select(remote and (allowed | not)) | "\($what) \(.) is not on the apk_registry allowlist";
 JQ
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && failures+=("$line")
+  done < <(jq -r '.images | to_entries[] | .key as $n | (.value.builders.apko.configs // [])[]
+      | select(.lockfile == "") | "image \($n): apko config \(.config) has no lockfile; every apko config needs one with apk_registry"' "$MODEL")
 
   while IFS=$'\t' read -r kind cfg; do
     [[ -n "$cfg" ]] || continue
@@ -955,12 +961,15 @@ JQ
            | .[] | select(type == "string") | entry as $e
            | select(($e | remote | not) and ($e | startswith("/") | not) and ($e | startswith(".") | not)) | "repository \(.) is neither a URL nor a local path"),
          ((.contents.repositories // []) + (.contents.build_repositories // [])
-           | .[] | select(type == "string") | entry | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist")
+           | .[] | select(type == "string") | entry | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist"),
+         (.contents.keyring // [] | keyrings("keyring"))
        else
          ([.environment.contents.repositories // [], .test.environment.contents.repositories // [],
            (.subpackages // [] | .[] | .test.environment.contents.repositories // [])] | add
            | .[] | select(type == "string") | entry | select(remote and (allowed | not))
-           | "environment repository \(.) is not on the apk_registry allowlist")
+           | "environment repository \(.) is not on the apk_registry allowlist"),
+         ([.environment.contents.keyring // [], .test.environment.contents.keyring // [],
+           (.subpackages // [] | .[] | .test.environment.contents.keyring // [])] | add | keyrings("environment keyring"))
        end)' "$WORK/registry-check.json")
   done < <(jq -r '
       (.images[] | (.builders.apko.configs // [])[] | ["apko config", .config]),
@@ -982,7 +991,8 @@ JQ
           elif ((.sha256 // "") | test("^sha256:[0-9a-f]{64}$") | not) then "package \(.name) has no whole-file sha256"
           else empty end),
       ([.contents.repositories // [], .contents.build_repositories // [], .contents.runtime_repositories // []] | add
-        | .[] | (.url // "") | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist")' "$lock" 2>/dev/null || echo "not valid JSON")
+        | .[] | (.url // "") | select(remote and (allowed | not)) | "repository \(.) is not on the apk_registry allowlist"),
+      ([.contents.keyring // [] | .[] | (.url // "")] | keyrings("keyring"))' "$lock" 2>/dev/null || echo "not valid JSON")
   done < <(jq -r '((.images[] | (.builders.apko.configs // [])[] | .lockfile), (.packages[] | .env_lockfile)) | select(. != "")' "$MODEL" | sort -u)
 
   if [[ ${#failures[@]} -gt 0 ]]; then
@@ -993,6 +1003,44 @@ JQ
     exit 1
   fi
   echo "apk_registry: every repository and locked URL is under https://${host}${prefix}"
+}
+
+# True for pull requests that run without an OIDC token: from a fork or
+# opened by Dependabot.
+run_without_oidc() {
+  [[ "$EVENT_NAME" == "pull_request" ]] || return 1
+  [[ "${GITHUB_ACTOR:-}" == "dependabot[bot]" ]] && return 0
+  [[ -n "$EVENT_PATH" && -f "$EVENT_PATH" ]] || return 1
+  jq -e '.pull_request.head.repo.full_name != .pull_request.base.repo.full_name' "$EVENT_PATH" >/dev/null 2>&1
+}
+
+# Drops lock file builders and packages when the registry needs an identity
+# and the run has no OIDC token to assume it.
+skip_registry_targets_without_oidc() {
+  local n p kept=() pkgs=()
+  jq -e '.apk_registry != null and .apk_registry.chainguard_identity != ""' "$MODEL" >/dev/null || return 0
+  run_without_oidc || return 0
+  for n in "${SELECT_IMAGES[@]+"${SELECT_IMAGES[@]}"}"; do
+    [[ -n "$n" ]] || continue
+    if jq -e --arg n "$n" 'any((.images[$n].builders.apko.configs // [])[]; .lockfile != "")' "$MODEL" >/dev/null; then
+      echo "::notice::Image $n builder apko needs the authenticated APK registry, and this pull request has no OIDC token; skipped"
+      jq -c --arg n "$n" 'del(.images[$n].builders.apko)' "$MODEL" > "$WORK/model-oidc.json"
+      mv "$WORK/model-oidc.json" "$MODEL"
+    fi
+    if jq -e --arg n "$n" '(.images[$n].builders | length) > 0' "$MODEL" >/dev/null; then
+      kept+=("$n")
+    fi
+  done
+  for p in "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}"; do
+    [[ -n "$p" ]] || continue
+    if jq -e --arg p "$p" '.packages[$p].env_lockfile != ""' "$MODEL" >/dev/null; then
+      echo "::notice::Package $p needs the authenticated APK registry, and this pull request has no OIDC token; skipped"
+    else
+      pkgs+=("$p")
+    fi
+  done
+  SELECT_IMAGES=("${kept[@]+"${kept[@]}"}")
+  SELECT_PACKAGES=("${pkgs[@]+"${pkgs[@]}"}")
 }
 
 main() {
@@ -1037,6 +1085,7 @@ main() {
   fi
 
   filter_builders_by_context "$(plan_context)"
+  skip_registry_targets_without_oidc
 
   if [[ "$TRUSTED" != "true" ]]; then
     local skipped_name
