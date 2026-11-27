@@ -1,6 +1,10 @@
 {
   "version": 2,
   "registry": "registry.invalid/selftest",
+  "apk_registry": {
+    "host": "packages.wolfi.dev",
+    "path_prefix": "/os/"
+  },
   "shared_paths": [
     ".github/workflows/build-images.yaml",
     "actions/**"
@@ -43,7 +47,8 @@
     "selftest-apko": {
       "builders": {
         "apko": {
-          "config": "test/fixtures/apko/tiny.yaml"
+          "config": "test/fixtures/apko/tiny.yaml",
+          "lockfile": "test/fixtures/apko/tiny.lock.json"
         }
       },
       "paths": [

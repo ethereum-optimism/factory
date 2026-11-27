@@ -89,6 +89,40 @@
         }
       }
     },
+    "apk_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "path_prefix"
+      ],
+      "description": "APK registry for lock file builds. When set, the fetch-apks job downloads every package and index pinned by the planned lockfile and env_lockfile entries, and refuses any URL that is not https on host under path_prefix and any package without a whole-file sha256.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+          "description": "Registry host name, without scheme, port or path."
+        },
+        "path_prefix": {
+          "type": "string",
+          "pattern": "^/([A-Za-z0-9._~-]+/)*$",
+          "description": "Path prefix every locked URL must start with, beginning and ending with /."
+        },
+        "chainguard_identity": {
+          "type": "string",
+          "description": "Chainguard identity id assumed with the job OIDC token to authenticate to the registry. Omit for anonymous registries. Pull requests from forks get no OIDC token and cannot fetch."
+        },
+        "redirect_hosts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+          },
+          "description": "Hosts the registry may redirect package downloads to, such as blob storage. A leading *. matches subdomains only. Credentials are never sent to them, and the downloaded file is still checked against the lock. Defaults to none: redirects off the registry host are refused."
+        }
+      }
+    },
     "images": {
       "type": "object",
       "propertyNames": {
@@ -201,6 +235,10 @@
         },
         "build_version": {
           "type": "string"
+        },
+        "env_lockfile": {
+          "type": "string",
+          "description": "melange environment lock file for this package, relative to the repository root, written by melange lock. Its packages and repository indexes are fetched by the fetch-apks job. Requires apk_registry."
         }
       }
     },
@@ -455,6 +493,10 @@
           "type": "string",
           "description": "apko configuration path. Defaults to apko/<image>.yaml. Ignored when configs is set."
         },
+        "lockfile": {
+          "type": "string",
+          "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job. Requires apk_registry. Applies to config; with configs, set lockfile on each entry."
+        },
         "configs": {
           "type": "array",
           "minItems": 1,
@@ -501,6 +543,10 @@
                   "type": "string"
                 },
                 "description": "Packages a -slim variant may list despite the apk-tools, busybox, and openssl guard. Version constraints are ignored. Each entry needs a reason in the PR description."
+              },
+              "lockfile": {
+                "type": "string",
+                "description": "apko lock file for this config, relative to the repository root, written by apko lock with whole-file sha256 entries. Its packages and repository indexes are fetched by the fetch-apks job. Requires apk_registry."
               }
             }
           }

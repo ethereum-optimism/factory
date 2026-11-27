@@ -1,0 +1,45 @@
+name: 'Install chainctl'
+description: >
+  Install the pinned chainctl release for linux/amd64 or linux/arm64 and put it
+  on PATH. The binary is verified against a pinned sha256 before it is made
+  executable. Uses no inputs, no token and no other actions.
+
+outputs:
+  path:
+    description: Absolute path of the installed chainctl binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install chainctl
+      id: install
+      shell: bash
+      env:
+        VERSION: 0.2.262
+        SHA256_LINUX_X86_64: 59bfa58ea64bc8943a7d633a7be0eb4a59e5eaa7a0dca6360907e219485b451b
+        SHA256_LINUX_ARM64: 2044c1d87058809a402374796ede4933147709d11d5280d8233637df23c86a3a
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            file=chainctl_linux_x86_64
+            sha256="$SHA256_LINUX_X86_64"
+            ;;
+          Linux/ARM64)
+            file=chainctl_linux_arm64
+            sha256="$SHA256_LINUX_ARM64"
+            ;;
+          *)
+            echo "::error::chainctl ${VERSION} is not pinned for ${RUNNER_OS}/${RUNNER_ARCH}; supported: Linux/X64, Linux/ARM64" >&2
+            exit 1
+            ;;
+        esac
+        bin_dir="$(mktemp -d "${RUNNER_TEMP}/chainctl-bin.XXXXXX")"
+        curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors \
+          -o "${bin_dir}/chainctl" "https://dl.enforce.dev/chainctl/${VERSION}/${file}"
+        echo "${sha256}  ${bin_dir}/chainctl" | sha256sum -c -
+        chmod 0755 "${bin_dir}/chainctl"
+        "${bin_dir}/chainctl" version
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        echo "path=${bin_dir}/chainctl" >> "$GITHUB_OUTPUT"

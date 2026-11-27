@@ -91,6 +91,33 @@ def is_one_of($v; $xs): any($xs[]; . == $v);
 
 def is_root_path: . == "" or . == "." or . == "./";
 
+def lockfile_path_ok:
+  (type == "string") and test("^[A-Za-z0-9._-][A-Za-z0-9._/-]*$") and ((split("/") | any(. == "..")) | not);
+
+def dns_name_re: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$";
+
+def norm_apk_registry($r):
+  if $r == null then null
+  elif ($r | type) != "object" then error("apk_registry must be an object")
+  else
+    ($r | keys - ["host", "path_prefix", "chainguard_identity", "redirect_hosts"]) as $unknown
+    | if ($unknown | length) > 0 then error("apk_registry: unknown field \($unknown[0])") else . end
+    | {
+        host: ($r.host // ""),
+        path_prefix: ($r.path_prefix // ""),
+        chainguard_identity: ($r.chainguard_identity // ""),
+        redirect_hosts: ($r.redirect_hosts // [])
+      }
+    | if (.host | type) != "string" or (.host | test(dns_name_re) | not)
+        then error("apk_registry.host must be a lowercase DNS name without scheme, port or path") else . end
+    | if (.path_prefix | type) != "string" or (.path_prefix | test("^/([A-Za-z0-9._~-]+/)*$") | not)
+        then error("apk_registry.path_prefix must start and end with / and use only [A-Za-z0-9._~-] segments") else . end
+    | if (.chainguard_identity | type) != "string" or ((.chainguard_identity != "") and (.chainguard_identity | test("^[A-Za-z0-9][A-Za-z0-9/_.-]*$") | not))
+        then error("apk_registry.chainguard_identity must be an identity id") else . end
+    | if (.redirect_hosts | type) != "array" or any(.redirect_hosts[]; (type != "string") or ((ltrimstr("*.")) | test(dns_name_re) | not))
+        then error("apk_registry.redirect_hosts must be an array of lowercase DNS names, each optionally starting with *.") else . end
+  end;
+
 def norm_source($k; $s; $self):
   if $s == null then null
   elif $self then
@@ -125,7 +152,8 @@ def norm_package($k):
         untrusted: ($c.cargo_profile.untrusted // "")
       },
       build_env: ($c.build_env // ""),
-      build_version: ($c.build_version // "")
+      build_version: ($c.build_version // ""),
+      env_lockfile: ($c.env_lockfile // "")
     };
 
 def validate_package($k):
@@ -138,7 +166,9 @@ def validate_package($k):
   | if is_one_of(.submodules; ["false", "true", "recursive"]) | not
     then error("packages.\($k).submodules must be false, true, or recursive") else . end
   | if .submodules != "false" and .source != null
-    then error("packages.\($k).submodules applies only to the calling repository checkout; use source_submodules for a source") else . end;
+    then error("packages.\($k).submodules applies only to the calling repository checkout; use source_submodules for a source") else . end
+  | if .env_lockfile != "" and (.env_lockfile | lockfile_path_ok | not)
+    then error("packages.\($k).env_lockfile must be a relative path without .. using [A-Za-z0-9._/-]") else . end;
 
 def norm_builders($n; $b):
   if ($b | type) != "object" then error("image \($n): builders must be an object") else . end
@@ -149,6 +179,8 @@ def norm_builders($n; $b):
       then error("image \($n): builders.docker.git_build_args must be a boolean") else . end
   | if ($b.docker | type) == "object" and ($b.docker.git_build_args == true) and (($b.docker.mode // "build") == "bake")
       then error("image \($n): git_build_args is not supported for mode bake") else . end
+  | if ($b.apko | type) == "object" and ($b.apko.configs // null) != null and ($b.apko | has("lockfile"))
+      then error("image \($n): builders.apko.lockfile applies to the single config form; set lockfile on each configs entry") else . end
   | {}
     + (if $b.docker then {docker: {
           mode: ($b.docker.mode // "build"),
@@ -173,8 +205,8 @@ def norm_builders($n; $b):
           needs_packages: ($b.apko.needs_packages // []),
           tag_prefix: ($b.apko.tag_prefix // null),
           configs: (if ($b.apko.configs // null) != null then
-                      [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // ""), smoke: (.smoke // null), allow_packages: ((.allow_packages // []) | map(sub("[=<>~!].*$"; "")))}]
-                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: "", smoke: null, allow_packages: []}] end),
+                      [$b.apko.configs[] | {config: .config, tag_suffix: (.tag_suffix // ""), smoke: (.smoke // null), allow_packages: ((.allow_packages // []) | map(sub("[=<>~!].*$"; ""))), lockfile: (.lockfile // "")}]
+                    else [{config: ($b.apko.config // ("apko/" + $n + ".yaml")), tag_suffix: "", smoke: null, allow_packages: [], lockfile: ($b.apko.lockfile // "")}] end),
           archs: ($b.apko.archs // null),
           runner_profile: (if ($b.apko | has("runner_profile")) then $b.apko.runner_profile else "standard" end),
           events: (if ($b.apko | has("events")) then $b.apko.events else build_events end)
@@ -265,6 +297,8 @@ def validate_image($n; $pkgs):
             then error("image \($n): tag_suffix may only contain letters, digits, dot, dash") else . end)
        | (if any($cfgs[]; (.smoke.verify_version | type) != "boolean")
             then error("image \($n): apko config smoke.verify_version must be boolean") else . end)
+       | (if any($cfgs[]; .lockfile != "" and (.lockfile | lockfile_path_ok | not))
+            then error("image \($n): apko lockfile must be a relative path without .. using [A-Za-z0-9._/-]") else . end)
        | (if any(.builders.apko.needs_packages[]; is_one_of(.; $pkgs) | not)
             then error("image \($n): needs_packages must name entries in packages") else . end))
     else . end
@@ -340,6 +374,7 @@ def normalize_v2:
       shared_paths: ($c.shared_paths // []),
       packages: $pkgs,
       hooks: {pre_build: ($c.hooks.pre_build // "")},
+      apk_registry: norm_apk_registry($c.apk_registry),
       images: (reduce (($c.images // {}) | to_entries[]) as $e ({};
           .[$e.key] = ($e.value | norm_image($e.key) | validate_image($e.key; $pkgnames)
             | . + {default_branch_tags: (if ($e.value | has("default_branch_tags"))
@@ -353,7 +388,10 @@ def normalize_v2:
     }
   | validate_shared_repositories
   | if (.release.tag_regex | type) != "string" then error("release.tag_regex must be a string") else . end
-  | if (.hooks.pre_build | type) != "string" then error("hooks.pre_build must be a string") else . end;
+  | if (.hooks.pre_build | type) != "string" then error("hooks.pre_build must be a string") else . end
+  | if .apk_registry == null
+       and (any(.packages[]; .env_lockfile != "") or any(.images[]; any((.builders.apko.configs // [])[]; .lockfile != "")))
+      then error("lockfile and env_lockfile need an apk_registry block in the catalog") else . end;
 
 def legacy_to_v2($d; $a):
   if ($d | has("default_runners")) or ($a | has("default_runners"))
@@ -1119,6 +1157,17 @@ main() {
               ) | .[]
           end
         ]) as $smoke
+      | ([ ($images[] as $n | ($m.images[$n].builders.apko.configs // [])[] | .lockfile),
+           ($pkgs[] as $p | $m.packages[$p].env_lockfile) ]
+          | map(select(. != "")) | unique) as $locks
+      | (if ($locks | length) == 0 then {} else {
+            host: $m.apk_registry.host,
+            path_prefix: $m.apk_registry.path_prefix,
+            redirect_hosts: $m.apk_registry.redirect_hosts,
+            identity: $m.apk_registry.chainguard_identity,
+            lockfiles: $locks,
+            archs: (if $trusted then [] else ["x86_64"] end)
+          } end) as $apk_fetch
       | {
           trusted: ($trusted | tostring),
           is_release: $is_release,
@@ -1127,6 +1176,8 @@ main() {
           has_publish: (($publish | length) > 0 | tostring),
           has_manifest: (($manifest | length) > 0 | tostring),
           has_smoke: (($smoke | length) > 0 | tostring),
+          has_apk_fetch: (($locks | length) > 0 | tostring),
+          apk_fetch: ($apk_fetch | tojson),
           packages_matrix: ($packages | tojson),
           build_matrix: ($build | tojson),
           publish_matrix: ($publish | tojson),
@@ -1152,8 +1203,20 @@ main() {
     fi
   fi
 
+  local lockfile missing=false
+  while IFS= read -r lockfile; do
+    [[ -n "$lockfile" ]] || continue
+    if [[ ! -f "$lockfile" ]]; then
+      echo "::error::lock file not found: $lockfile" >&2
+      missing=true
+    fi
+  done < <(jq -r '.apk_fetch | fromjson | .lockfiles[]?' <<< "$outputs")
+  if [[ "$missing" == true ]]; then
+    exit 1
+  fi
+
   jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$outputs" >> "$GITHUB_OUTPUT"
-  jq -r '"selected images: \(.selected_images)\nselected packages: \(.selected_packages)\nbuild legs: \(.build_matrix | fromjson | length)\npackage legs: \(.packages_matrix | fromjson | length)\npublish legs: \(.publish_matrix | fromjson | length)\nmanifest legs: \(.manifest_matrix | fromjson | length)\nsmoke legs: \(.smoke_matrix | fromjson | length)"' <<< "$outputs"
+  jq -r '"selected images: \(.selected_images)\nselected packages: \(.selected_packages)\nbuild legs: \(.build_matrix | fromjson | length)\npackage legs: \(.packages_matrix | fromjson | length)\npublish legs: \(.publish_matrix | fromjson | length)\nmanifest legs: \(.manifest_matrix | fromjson | length)\nsmoke legs: \(.smoke_matrix | fromjson | length)\nlock files to fetch: \(.apk_fetch | fromjson | .lockfiles // [] | length)"' <<< "$outputs"
 }
 
 main

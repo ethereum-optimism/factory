@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - actions/build-packages/**
+      - actions/fetch-apks/**
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
@@ -16,6 +17,7 @@ on:
       - main
     paths:
       - actions/build-packages/**
+      - actions/fetch-apks/**
       - actions/plan-images/**
       - actions/fork-context/**
       - actions/publish-image/**
@@ -48,6 +50,9 @@ jobs:
 
       - name: Test publish-image bake overrides
         run: actions/publish-image/publish-image.test.sh
+
+      - name: Test fetch-apks
+        run: python3 -m unittest discover -s actions/fetch-apks -p 'test_*.py' -v
 
       - name: Lint self-tests
         run: scripts/lint-untrusted-permissions.test.sh

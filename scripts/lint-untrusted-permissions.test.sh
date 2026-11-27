@@ -104,6 +104,36 @@ elif name == "selftest_caller_read_only":
 elif name == "privileged_without_trusted_if":
     mutate("    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_manifest == 'true' && needs.publish.result == 'success' }}",
            "    if: ${{ always() && needs.plan.outputs.has_manifest == 'true' }}")
+elif name == "fetch_runs_repo_script":
+    mutate("      - name: Fetch locked APKs\n",
+           "      - name: Build helper\n        run: ./scripts/prepare.sh\n\n      - name: Fetch locked APKs\n")
+elif name == "fetch_runs_repo_script_interpreter":
+    mutate("      - name: Fetch locked APKs\n",
+           "      - name: Build helper\n        run: bash scripts/prepare.sh\n\n      - name: Fetch locked APKs\n")
+elif name == "fetch_uses_repo_action":
+    mutate("      - name: Fetch locked APKs\n",
+           "      - name: Repository action\n        uses: ./.github/actions/prepare\n\n      - name: Fetch locked APKs\n")
+elif name == "fetch_uses_other_factory_action":
+    mutate("      - name: Fetch locked APKs\n",
+           "      - name: Plan again\n        uses: ./.factory/actions/plan-images\n        with:\n          trusted: 'false'\n\n      - name: Fetch locked APKs\n")
+elif name == "fetch_action_runs_workspace_script":
+    path = f"{root}/actions/fetch-apks/action.yml"
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    old = 'python3 -I "${GITHUB_ACTION_PATH}/fetch_apks.py"'
+    if content.count(old) != 1:
+        raise SystemExit("fetch-apks anchor not unique")
+    content = content.replace(old, 'python3 -I "${GITHUB_WORKSPACE}/fetch_apks.py"')
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+elif name == "fetch_extra_permission":
+    mutate("    if: needs.plan.outputs.has_apk_fetch == 'true'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n",
+           "    if: needs.plan.outputs.has_apk_fetch == 'true'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n      packages: write\n")
+elif name == "fetch_environment":
+    mutate("  fetch-apks:\n    name: fetch-apks\n", "  fetch-apks:\n    name: fetch-apks\n    environment: release\n")
+elif name == "chainctl_outside_fetch":
+    mutate("      - name: Set up Go for ko\n        if: matrix.mode == 'ko'\n        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6\n        with:\n          go-version-file: ${{ matrix.go_version_file || format('{0}/go.mod', matrix.context) }}\n          cache: false\n\n      - name: Install ko\n        if: matrix.mode == 'ko'\n        uses: ./.factory/actions/install-ko\n\n      - name: Build image\n",
+           "      - name: Install chainctl\n        uses: ./.factory/actions/install-chainctl\n\n      - name: Build image\n")
 else:
     raise SystemExit(f"unknown case {name}")
 open(wf, "w", encoding="utf-8").write(text)
@@ -134,5 +164,13 @@ expect_fail checkout_order "caller checkout must precede"
 expect_fail smoke_without_caller_checkout "runs smoke-test without a caller checkout"
 expect_fail selftest_caller_read_only "must grant exactly"
 expect_fail privileged_without_trusted_if "unprivileged job must not declare an environment"
+expect_fail fetch_runs_repo_script "fetch-apks run step may execute repository code"
+expect_fail fetch_runs_repo_script_interpreter "fetch-apks run step may execute repository code"
+expect_fail fetch_uses_repo_action "fetch-apks uses a repository action"
+expect_fail fetch_uses_other_factory_action "fetch-apks may only use the"
+expect_fail fetch_action_runs_workspace_script "reached from fetch-apks may execute repository code"
+expect_fail fetch_extra_permission "fetch-apks permissions must be exactly"
+expect_fail fetch_environment "fetch-apks must not declare an environment"
+expect_fail chainctl_outside_fetch "only the fetch-apks job may reach actions/install-chainctl"
 
 echo "lint self-tests passed"
