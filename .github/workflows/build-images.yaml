@@ -27,6 +27,10 @@ on:
         required: false
         type: string
         default: ''
+    outputs:
+      published:
+        description: 'JSON array of the images this run published, one entry per apko or ko variant and docker manifest list: {id, image, name, ref, digest}. name is <registry>/<repository>, ref is name:<commit tag>, digest is the published sha256 digest. Empty on untrusted runs, [] when a trusted run published nothing.'
+        value: ${{ jobs.published.outputs.images }}
 
 jobs:
   plan:
@@ -532,6 +536,26 @@ jobs:
           push-to-registry: true
           show-summary: false
 
+      - name: Generate image SBOM
+        if: matrix.kind == 'apko' || matrix.kind == 'ko'
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ matrix.registry }}/${{ matrix.repository }}@${{ steps.promote.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom-${{ matrix.id }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest image SBOM
+        if: matrix.kind == 'apko' || matrix.kind == 'ko'
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ matrix.registry }}/${{ matrix.repository }}
+          subject-digest: ${{ steps.promote.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom-${{ matrix.id }}.spdx.json
+          push-to-registry: true
+          show-summary: false
+
       - name: Upload pushed digest
         if: matrix.kind == 'docker-arch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -647,6 +671,24 @@ jobs:
           push-to-registry: true
           show-summary: false
 
+      - name: Generate manifest SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ matrix.registry }}/${{ matrix.repository }}@${{ steps.manifest.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom-${{ matrix.id }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest manifest SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ matrix.registry }}/${{ matrix.repository }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom-${{ matrix.id }}.spdx.json
+          push-to-registry: true
+          show-summary: false
+
       - name: Upload final digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -751,9 +793,64 @@ jobs:
           script: ${{ matrix.smoke_script }}
           expected_version: ${{ matrix.expected_version }}
 
+  published:
+    name: published
+    needs: [plan, publish, publish-manifest]
+    if: ${{ always() && needs.plan.outputs.trusted == 'true' && needs.plan.outputs.has_publish == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Download published digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: final-*
+          path: ${{ runner.temp }}/final
+          merge-multiple: true
+
+      - name: List published images
+        id: list
+        env:
+          PUBLISH_MATRIX: ${{ needs.plan.outputs.publish_matrix }}
+          MANIFEST_MATRIX: ${{ needs.plan.outputs.manifest_matrix }}
+          FINAL_DIR: ${{ runner.temp }}/final
+        run: |
+          set -euo pipefail
+          digests='{}'
+          if [ -d "$FINAL_DIR" ]; then
+            for file in "$FINAL_DIR"/*.txt; do
+              [ -f "$file" ] || continue
+              id="$(basename "$file" .txt)"
+              digest="$(tr -d '[:space:]' < "$file")"
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::invalid digest for $id: '$digest'" >&2
+                exit 1
+              fi
+              digests="$(jq -c --arg id "$id" --arg d "$digest" '. + {($id): $d}' <<< "$digests")"
+            done
+          fi
+          images="$(jq -c -n \
+            --argjson publish "$PUBLISH_MATRIX" \
+            --argjson manifest "$MANIFEST_MATRIX" \
+            --argjson digests "$digests" \
+            '[($publish[] | select(.kind == "apko" or .kind == "ko")), $manifest[]]
+             | map(select($digests[.id] != null)
+                   | (.registry + "/" + .repository) as $name
+                   | {id, image, name: $name, ref: ($name + ":" + .sha_tag), digest: $digests[.id]})
+             | sort_by(.id)')"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "\(.ref)@\(.digest)"' <<< "$images"
+
   result:
     name: result
-    needs: [plan, fetch-apks, packages, build, publish, publish-manifest, smoke]
+    needs: [plan, fetch-apks, packages, build, publish, publish-manifest, smoke, published]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     permissions: {}
@@ -767,6 +864,7 @@ jobs:
           PUBLISH_RESULT: ${{ needs.publish.result }}
           MANIFEST_RESULT: ${{ needs.publish-manifest.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
+          PUBLISHED_RESULT: ${{ needs.published.result }}
           HAS_BUILDS: ${{ needs.plan.outputs.has_builds }}
           HAS_PUBLISH: ${{ needs.plan.outputs.has_publish }}
         run: |
@@ -776,7 +874,7 @@ jobs:
             failures+=("plan: $PLAN_RESULT")
           fi
           for entry in "fetch-apks:$FETCH_RESULT" "packages:$PACKAGES_RESULT" "build:$BUILD_RESULT" "publish:$PUBLISH_RESULT" \
-                       "publish-manifest:$MANIFEST_RESULT" "smoke:$SMOKE_RESULT"; do
+                       "publish-manifest:$MANIFEST_RESULT" "smoke:$SMOKE_RESULT" "published:$PUBLISHED_RESULT"; do
             name="${entry%%:*}"
             value="${entry#*:}"
             case "$value" in
