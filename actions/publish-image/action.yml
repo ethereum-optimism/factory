@@ -62,6 +62,10 @@ inputs:
     description: 'apko kind only, with lockfile: apko cache directory from the apk-cache artifact.'
     required: false
     default: ''
+  package_digests_dir:
+    description: 'apko kind only, with lockfile and repositories: directory of apk-digests files from the package legs. Each package the lock marks local is accepted only with one of these digests.'
+    required: false
+    default: ''
   arch:
     description: 'docker-arch kind only: architecture to build and push, amd64 or arm64.'
     required: false
@@ -175,6 +179,7 @@ runs:
         APKO_ARCHS: ${{ inputs.archs }}
         APKO_LOCKFILE: ${{ inputs.lockfile }}
         APKO_CACHE_DIR: ${{ inputs.cache_dir }}
+        APKO_DIGESTS_DIR: ${{ inputs.package_digests_dir }}
         APKO_BUILD_ROOT: ${{ runner.temp }}
       run: |
         set -euo pipefail
@@ -194,11 +199,8 @@ runs:
         fi
         lock_path=""
         cache_dir=""
+        local_packages=""
         if [ -n "$APKO_LOCKFILE" ]; then
-          if [ -n "$APKO_REPOSITORIES" ]; then
-            echo "::error::lock file builds with local package repositories are not supported" >&2
-            exit 1
-          fi
           if [ -z "$APKO_CACHE_DIR" ] || [ ! -d "$APKO_CACHE_DIR" ]; then
             echo "::error::lockfile $APKO_LOCKFILE needs the apk-cache artifact in cache_dir" >&2
             exit 1
@@ -206,6 +208,7 @@ runs:
           lock_path="$(cd "$(dirname "${GITHUB_WORKSPACE}/${APKO_LOCKFILE}")" && pwd)/$(basename "$APKO_LOCKFILE")"
           cache_dir="$(cd "$APKO_CACHE_DIR" && pwd)"
           mounts+=(-v "${lock_path}:${lock_path}:ro" -v "${cache_dir}:${cache_dir}")
+          local_packages="$("${GITHUB_ACTION_PATH}/../build-image/local-packages.sh" "$lock_path" "$APKO_DIGESTS_DIR" "$APKO_ARCHS" | paste -sd, -)"
         fi
 
         read -r -d '' apko_script <<'APKO_EOF' || true
@@ -216,6 +219,12 @@ runs:
         mode_args=(--ignore-signatures)
         if [[ -n "$APKO_LOCK_PATH" ]]; then
           mode_args=(--lockfile "$APKO_LOCK_PATH" --offline --cache-dir "$APKO_CACHE_PATH" --require-strong-checksums)
+          if [[ -n "$APKO_LOCAL_PACKAGES" ]]; then
+            IFS=',' read -ra accepted <<< "$APKO_LOCAL_PACKAGES"
+            for entry in "${accepted[@]}"; do
+              mode_args+=(--local-package "$entry")
+            done
+          fi
         fi
         /usr/bin/apko publish \
           "${mode_args[@]}" \
@@ -235,6 +244,7 @@ runs:
           -e APKO_OUT_DIR="$out_dir" \
           -e APKO_LOCK_PATH="$lock_path" \
           -e APKO_CACHE_PATH="$cache_dir" \
+          -e APKO_LOCAL_PACKAGES="$local_packages" \
           "$APKO_SANDBOX" -c "$apko_script"
 
         ref="$(tail -n 1 "${out_dir}/publish.digest")"
