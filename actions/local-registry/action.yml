@@ -1,0 +1,41 @@
+name: 'Local registry'
+description: >
+  Start a pinned OCI registry container bound to 127.0.0.1 on a free port, for
+  staging an image before it is smoke tested and copied to the real registry.
+  Outputs the address as localhost:<port>. Stop it with docker rm -f on the
+  container output. Uses no registry credentials and no OIDC token.
+
+outputs:
+  address:
+    description: 'Registry address, localhost:<port>.'
+    value: ${{ steps.start.outputs.address }}
+  container:
+    description: 'Name of the registry container.'
+    value: ${{ steps.start.outputs.container }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start local registry
+      id: start
+      shell: bash
+      env:
+        REGISTRY_IMAGE: registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+      run: |
+        set -euo pipefail
+        CONTAINER="factory-stage-${GITHUB_RUN_ID}-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+        docker run --detach --name "$CONTAINER" --publish 127.0.0.1::5000 "$REGISTRY_IMAGE" > /dev/null
+        port="$(docker port "$CONTAINER" 5000/tcp | head -n 1 | awk -F: '{print $NF}')"
+        address="localhost:${port}"
+        for _ in $(seq 1 30); do
+          if curl -fsS "http://${address}/v2/" > /dev/null 2>&1; then
+            echo "address=${address}" >> "$GITHUB_OUTPUT"
+            echo "container=${CONTAINER}" >> "$GITHUB_OUTPUT"
+            echo "local registry: ${address}"
+            exit 0
+          fi
+          sleep 1
+        done
+        docker logs "$CONTAINER" >&2 || true
+        echo "::error::local registry did not become ready" >&2
+        exit 1

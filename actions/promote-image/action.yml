@@ -1,0 +1,73 @@
+name: 'Promote image'
+description: >
+  Copy a smoke-tested image from the local staging registry to the real
+  registry by digest, tag it, copy its sha256-* attachment tags, and verify that
+  every published reference resolves to the tested digest. docker-arch legs are
+  copied by digest only, for the manifest job to tag. Writes the digest to
+  RUNNER_TEMP/<id>.txt. The calling job must authenticate to Google Cloud first.
+
+inputs:
+  kind:
+    description: 'apko, ko, or docker-arch.'
+    required: true
+  source:
+    description: 'Staged repository, for example localhost:5000/group/name.'
+    required: true
+  digest:
+    description: 'Smoke-tested digest in the staged repository, sha256:...'
+    required: true
+  registry:
+    description: 'Registry prefix without trailing slash.'
+    required: true
+  repository:
+    description: 'Registry path under registry.'
+    required: true
+  sha_tag:
+    description: 'Commit tag. Not used for docker-arch.'
+    required: false
+    default: ''
+  ref_tag:
+    description: 'Ref tag. Not used for docker-arch.'
+    required: false
+    default: ''
+  alias_tags:
+    description: 'Comma-separated alias tags. Not used for docker-arch.'
+    required: false
+    default: ''
+  id:
+    description: 'Leg identifier. The digest is written to RUNNER_TEMP/<id>.txt.'
+    required: true
+
+outputs:
+  digest:
+    description: 'Digest published to the real registry, equal to the input digest.'
+    value: ${{ steps.promote.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install crane
+      uses: ./.factory/actions/install-crane
+
+    - name: Configure Artifact Registry credential helper
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        set -euo pipefail
+        gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
+
+    - name: Copy the tested digest
+      id: promote
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        SOURCE: ${{ inputs.source }}
+        DIGEST: ${{ inputs.digest }}
+        DEST: ${{ inputs.registry }}/${{ inputs.repository }}
+        SHA_TAG: ${{ inputs.sha_tag }}
+        REF_TAG: ${{ inputs.ref_tag }}
+        ALIAS_TAGS: ${{ inputs.alias_tags }}
+        LEG_ID: ${{ inputs.id }}
+        RUNNER_TEMP_DIR: ${{ runner.temp }}
+      run: bash "${GITHUB_ACTION_PATH}/promote.sh"

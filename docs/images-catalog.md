@@ -234,8 +234,9 @@ When an image has both builders, `primary` is required. Other image fields:
   variant's `config` file is a changed path of the image too, even when `paths`
   does not list it.
 - `smoke`: `commands` (each string split on whitespace into entrypoint and
-  arguments), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
-  `verify_version` (on release tags, a command must print the version).
+  arguments), `tests` (runs with exit code and output assertions, see Smoke
+  tests), `script` (repository script run with `IMAGE` and `IMAGE_ARCH`),
+  `verify_version` (on release tags, a command or test must print the version).
 - `default_branch_tags`: overrides the top-level list for this image. An empty array publishes no alias tags for this image.
 - `repository`: registry path under `registry`, for example `group/name`.
   Defaults to the image name. See Several versions in one repository.
@@ -277,8 +278,38 @@ PATH while the Dockerfile image ships `/bin/tool`:
 ```
 
 Smoke scripts run from the caller checkout, at the path given in the catalog, on
-both untrusted and trusted runs. `IMAGE` is a local tag on untrusted runs and a
-digest reference (`<registry>/<image>@sha256:...`) on trusted runs.
+both untrusted and trusted runs. `IMAGE` is a local tag on untrusted runs, the
+staged digest reference (`localhost:<port>/<repository>@sha256:...`) before
+publishing on trusted runs, and the published digest reference
+(`<registry>/<repository>@sha256:...`) after publishing.
+
+### Smoke tests
+
+`smoke.tests` is an array of runs of the image. Each run is checked for its
+exit code and, optionally, for a substring of its output:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `args` | `[]` | Arguments passed to the image, each one argument with no shell splitting. |
+| `entrypoint` | image entrypoint, or `/bin/sh` with `shell` | Entrypoint override (`docker run --entrypoint`). |
+| `shell` | none | A command line, run as `<entrypoint> -c <shell>`. Cannot be combined with `args`. |
+| `expected_exit` | `0` | Exit code the run must return, 0 to 255. |
+| `expected_output` | `""` | Substring that stdout and stderr together must contain. Empty skips the check. |
+
+A test needs at least one of `args`, `entrypoint`, or `shell`. Unknown fields
+fail the plan. `commands` keep their behavior: each passes when the entrypoint
+can run, whatever its exit code. With `verify_version`, the release version
+may be printed by a command or by a test.
+
+```json
+"smoke": {
+  "tests": [
+    {"entrypoint": "/usr/local/bin/geth", "args": ["version"], "expected_output": "Geth"},
+    {"shell": "geth --help | head -n 1"},
+    {"args": ["--no-such-flag"], "expected_exit": 2, "expected_output": "flag provided but not defined"}
+  ]
+}
+```
 
 ### Builder events
 
@@ -326,8 +357,9 @@ different `config` costs one apko assembly, not a rebuild of the packages.
 - `smoke`: the variant's smoke test. Resolution: the variant's `smoke`, else the
   builder `smoke`, else the image `smoke`. It replaces the inherited smoke
   entirely, and an empty object disables smoke for that variant. Untrusted runs
-  smoke the local amd64 build. Trusted runs smoke the pushed digest of every
-  architecture. `verify_version` applies on release tags.
+  smoke the local amd64 build. Trusted runs smoke the staged amd64 digest
+  before publishing, then the pushed digest of every architecture.
+  `verify_version` applies on release tags.
 - `allow_packages`: package names exempt from the `-slim` guard below. Version
   constraints are ignored. Give a reason for each entry in the PR description.
 - Change detection: each variant's `config` file counts as a changed path of
@@ -546,10 +578,21 @@ Trusted runs:
   unpublished;
 - on a workflow dispatch, plan every image and package, or only the `target`
   image (see Dispatching one image);
-- publish with the `release` environment: docker architectures are built
-  natively and pushed by digest, apko images are published for all catalog
-  architectures in one `apko publish`, and ko images are published for all
-  catalog architectures in one `ko build --platform` (no manifest job);
+- build into a local staging registry with the `release` environment: docker
+  architectures are built natively and pushed by digest, apko images are
+  published for all catalog architectures in one `apko publish`, and ko images
+  are published for all catalog architectures in one `ko build --platform`.
+  The staging registry runs on the publish runner, bound to `127.0.0.1`, and
+  receives no credentials;
+- smoke test the staged digest before anything reaches the registry: each
+  docker architecture on its native runner, and the amd64 image of apko and ko
+  builds (an apko or ko build without amd64 is only smoke tested after
+  publishing). A failing smoke test publishes nothing for that leg;
+- copy the exact tested digest to the registry with `crane copy`, add the
+  tags, copy the `sha256-*` attachment tags (such as SBOMs that apko and ko
+  attach), and fail unless the published manifest and every tag resolve to the
+  tested digest (`actions/promote-image`). Docker architectures are copied by
+  digest only, and the manifest job tags the manifest list;
 - merge docker manifest lists and attest apko and ko images and manifest lists;
 - smoke test every architecture of the pushed digest (amd64 on the standard
   runner, arm64 on the arm runner), pulling by digest.
@@ -619,6 +662,12 @@ prefix.
 
 ## Tests
 
+`actions/smoke-test/smoke-test.test.sh` runs the smoke action against a fake
+`docker` to check commands, tests, exit codes, and output assertions, and
+`actions/promote-image/promote.test.sh` checks the copy and digest
+verification against a fake `crane`. The self-test workflow builds a docker,
+an apko, and a ko fixture into a staging registry, smoke tests the staged
+digest, promotes it to a second local registry, and smoke tests the copy.
 `actions/plan-images/plan-images.test.sh` covers normalization, validation,
 tag templates, shared repositories, tag and runner selection, legacy merging, hooks, notices, and change detection.
 `scripts/lint-untrusted-permissions.test.sh` runs the lint against the real

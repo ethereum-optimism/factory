@@ -214,10 +214,35 @@ def norm_builders($n; $b):
           events: (if ($b.apko | has("events")) then $b.apko.events else build_events end)
         }} else {} end);
 
+def norm_smoke_test:
+  if type != "object" then error("smoke.tests entries must be objects") else . end
+  | (keys - ["args", "entrypoint", "shell", "expected_exit", "expected_output"]) as $unknown
+  | if ($unknown | length) > 0 then error("smoke.tests entries do not take \($unknown[0])") else . end
+  | if has("args") and ((.args | type) != "array" or any(.args[]; type != "string"))
+      then error("smoke.tests args must be an array of strings") else . end
+  | if any(.entrypoint, .shell, .expected_output; . != null and type != "string")
+      then error("smoke.tests entrypoint, shell and expected_output must be strings") else . end
+  | if has("entrypoint") and .entrypoint == "" then error("smoke.tests entrypoint must not be empty") else . end
+  | if has("shell") and has("args") then error("smoke.tests entries take shell or args, not both") else . end
+  | if has("shell") and .shell == "" then error("smoke.tests shell must not be empty") else . end
+  | if (has("shell") or has("args") or has("entrypoint")) | not
+      then error("smoke.tests entries need args, entrypoint, or shell") else . end
+  | if has("expected_exit") and ((.expected_exit | type) != "number" or .expected_exit != (.expected_exit | floor) or .expected_exit < 0 or .expected_exit > 255)
+      then error("smoke.tests expected_exit must be an integer from 0 to 255") else . end
+  | {
+      args: (.args // []),
+      entrypoint: (.entrypoint // (if has("shell") then "/bin/sh" else "" end)),
+      shell: (.shell // ""),
+      expected_exit: (.expected_exit // 0),
+      expected_output: (.expected_output // "")
+    };
+
 def norm_smoke($s):
   if ($s | type) != "object" and ($s | type) != "null" then error("smoke must be an object") else null end
+  | if (($s.tests // []) | type) != "array" then error("smoke.tests must be an array") else null end
   | {
       commands: ($s.commands // []),
+      tests: [($s.tests // [])[] | norm_smoke_test],
       script: ($s.script // ""),
       verify_version: ($s.verify_version // false)
     };
@@ -482,7 +507,15 @@ def builder_runner($b; $arch):
 
 def sanitize_ref: gsub("[^a-zA-Z0-9.]"; "-");
 def sanitize_suffix: gsub("[^a-zA-Z0-9.-]"; "-");
-def has_smoke($s): (($s.commands | length) > 0) or ($s.script != "");
+def has_smoke($s): (($s.commands | length) > 0) or (($s.tests | length) > 0) or ($s.script != "");
+def smoke_fields($s; $ver; $arch): {
+    has_smoke: has_smoke($s),
+    smoke_commands: ($s.commands | tojson),
+    smoke_tests: ($s.tests | tojson),
+    smoke_script: $s.script,
+    expected_version: (if $s.verify_version and $ver != "" then $ver else "" end),
+    smoke_arch: (if has_smoke($s) then $arch else "" end)
+  };
 def uniq_keep: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
 def prefix_for($m; $i; $b): $m.tag_prefix + ($i.builders[$b].tag_prefix // (if $i.primary == $b then "" else ($b + "-") end));
 def tag_ctx($sha; $date; $ref): {sha: $sha, sha12: $sha[0:12], date: $date, ref: $ref};
@@ -1025,9 +1058,10 @@ main() {
                     config: "",
                     needs_packages: "",
                     suffix: "",
-                    has_smoke: has_smoke($i.builders.docker.smoke),
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
-                    smoke_script: $i.builders.docker.smoke.script
+                    smoke_tests: ($i.builders.docker.smoke.tests | tojson),
+                    smoke_script: $i.builders.docker.smoke.script,
+                    has_smoke: has_smoke($i.builders.docker.smoke)
                   } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date)] else [] end)
               + (if $i.builders.apko and has_member($i.builders.apko.archs; "amd64") then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
@@ -1051,6 +1085,7 @@ main() {
                       suffix: $v.tag_suffix,
                       has_smoke: has_smoke($v.smoke),
                       smoke_commands: ($v.smoke.commands | tojson),
+                      smoke_tests: ($v.smoke.tests | tojson),
                       smoke_script: $v.smoke.script
                     }
                 ] else [] end)
@@ -1081,7 +1116,7 @@ main() {
                     ref_tag: ref_tag_for($m; $i; "docker"; $ctx; ""),
                     registry: $m.registry,
                     repository: $i.repository
-                  }] else [] end)
+                  } + smoke_fields($i.builders.docker.smoke; $version; $a)] else [] end)
               + (if $i.builders.apko then [ $i.builders.apko.configs[] as $v
                   | ($v.tag_suffix | sanitize_suffix) as $sfx
                   | {
@@ -1107,7 +1142,8 @@ main() {
                       ref_tag: ref_tag_for($m; $i; "apko"; $ctx; $v.tag_suffix),
                       registry: $m.registry,
                       repository: $i.repository
-                    } | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "apko"); $v.tag_suffix))
+                    } + smoke_fields($v.smoke; $version; (if has_member($i.builders.apko.archs; "amd64") then "amd64" else "" end))
+                      | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "apko"); $v.tag_suffix))
                 ] else [] end)
               + (if $i.builders.docker and $i.builders.docker.mode == "ko" then [{
                   id: "\($n)-ko",
@@ -1131,7 +1167,9 @@ main() {
                   ref_tag: ref_tag_for($m; $i; "docker"; $ctx; ""),
                   registry: $m.registry,
                   repository: $i.repository
-                } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date) | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
+                } + ko_fields($hook; $i.builders.docker; $version; $git_sha; $git_date)
+                  + smoke_fields($i.builders.docker.smoke; $version; (if has_member($i.builders.docker.archs; "amd64") then "amd64" else "" end))
+                  | with_alias(alias_tags_for($alias_on; $i.default_branch_tags; prefix_for($m; $i; "docker"); ""))] else [] end)
             ) | .[]
           end
         ]) as $publish
@@ -1165,6 +1203,7 @@ main() {
                     repository: $i.repository,
                     final_artifact: "final-\($n)-\(if $i.builders.docker.mode == "ko" then "ko" else "docker" end)",
                     smoke_commands: ($i.builders.docker.smoke.commands | tojson),
+                    smoke_tests: ($i.builders.docker.smoke.tests | tojson),
                     smoke_script: $i.builders.docker.smoke.script,
                     expected_version: (if $i.builders.docker.smoke.verify_version and $version != "" then $version else "" end)
                   }] else [] end)
@@ -1181,6 +1220,7 @@ main() {
                         repository: $i.repository,
                         final_artifact: "final-\($n)-apko\($sfx)",
                         smoke_commands: ($v.smoke.commands | tojson),
+                        smoke_tests: ($v.smoke.tests | tojson),
                         smoke_script: $v.smoke.script,
                         expected_version: (if $v.smoke.verify_version and $version != "" then $version else "" end)
                       }

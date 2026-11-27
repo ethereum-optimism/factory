@@ -323,6 +323,13 @@
               },
               "description": "Each string is split on whitespace into an entrypoint and arguments."
             },
+            "tests": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/smoke_test"
+              },
+              "description": "Smoke tests with exit code and output assertions."
+            },
             "script": {
               "type": "string",
               "description": "Repository script run with IMAGE and IMAGE_ARCH set."
@@ -473,6 +480,13 @@
               },
               "description": "Each string is split on whitespace into an entrypoint and arguments."
             },
+            "tests": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/smoke_test"
+              },
+              "description": "Smoke tests with exit code and output assertions."
+            },
             "script": {
               "type": "string",
               "description": "Repository script run with IMAGE and IMAGE_ARCH set."
@@ -526,6 +540,13 @@
                       "type": "string"
                     },
                     "description": "Each string is split on whitespace into an entrypoint and arguments."
+                  },
+                  "tests": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/smoke_test"
+                    },
+                    "description": "Smoke tests with exit code and output assertions."
                   },
                   "script": {
                     "type": "string",
@@ -608,6 +629,13 @@
               },
               "description": "Each string is split on whitespace into an entrypoint and arguments."
             },
+            "tests": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/smoke_test"
+              },
+              "description": "Smoke tests with exit code and output assertions."
+            },
             "script": {
               "type": "string",
               "description": "Repository script run with IMAGE and IMAGE_ARCH set."
@@ -617,6 +645,64 @@
               "description": "Require a command to print the release version on release tags."
             }
           }
+        }
+      }
+    },
+    "smoke_test": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One smoke test: a docker run of the image whose exit code and output are checked. Needs args, entrypoint, or shell. shell runs the string with the entrypoint (default /bin/sh) and -c, and cannot be combined with args.",
+      "anyOf": [
+        {
+          "required": [
+            "args"
+          ]
+        },
+        {
+          "required": [
+            "entrypoint"
+          ]
+        },
+        {
+          "required": [
+            "shell"
+          ]
+        }
+      ],
+      "not": {
+        "required": [
+          "shell",
+          "args"
+        ]
+      },
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to the image, each as one argument with no shell splitting."
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Entrypoint override. Defaults to the image entrypoint, or /bin/sh with shell."
+        },
+        "shell": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell command line, run as <entrypoint> -c <shell>."
+        },
+        "expected_exit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "default": 0,
+          "description": "Exit code the run must return."
+        },
+        "expected_output": {
+          "type": "string",
+          "description": "Substring the combined stdout and stderr must contain. Empty skips the check."
         }
       }
     }
