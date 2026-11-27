@@ -18,6 +18,12 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Catalog image name to build alone. Empty builds the full catalog.'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,3 +36,5 @@ jobs:
       id-token: write
       attestations: write
     uses: ethereum-optimism/factory/.github/workflows/build-images.yaml@<FULL_SHA>
+    with:
+      target: ${{ inputs.target || '' }}

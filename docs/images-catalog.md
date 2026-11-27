@@ -482,7 +482,16 @@ Untrusted runs:
 
 Trusted runs:
 
-- plan every image and package in the catalog, whatever the diff;
+- on a default-branch push, plan only the images and packages affected by the
+  push, from the event's `before` and `after` commits, with the same rules as
+  pull requests (a change to the catalog or a shared path plans the full
+  catalog). When the push has no usable `before` commit (a new branch, or a
+  commit no longer in the repository), the full catalog is planned;
+- on a schedule, plan every image and package in the catalog. A scheduled
+  run is the full rebuild that also catches anything a failed push run left
+  unpublished;
+- on a workflow dispatch, plan every image and package, or only the `target`
+  image (see Dispatching one image);
 - publish with the `release` environment: docker architectures are built
   natively and pushed by digest, apko images are published for all catalog
   architectures in one `apko publish`, and ko images are published for all
@@ -493,6 +502,32 @@ Trusted runs:
 
 A ko image publishes `<registry>/<repository>` with no path suffix, under the
 `<sha_tag>` and `<ref_tag>` tags.
+
+## Dispatching one image
+
+The reusable workflow takes a `target` input: a catalog image name. On a
+`workflow_dispatch` run with a non-empty `target`, the planner plans only that
+image and the packages it needs, in every context rule that applies otherwise
+(trust, builder `events`, architectures). An empty `target` plans the full
+catalog. A `target` that is not a catalog image, or a non-empty `target` on any
+other event or on a tag ref, fails the plan.
+
+The caller passes its own dispatch input through, as in
+[`templates/build-images.yaml`](../templates/build-images.yaml):
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        type: string
+        default: ''
+jobs:
+  build-images:
+    uses: ethereum-optimism/factory/.github/workflows/build-images.yaml@<FULL_SHA>
+    with:
+      target: ${{ inputs.target || '' }}
+```
 
 ## Legacy catalogs
 

@@ -14,6 +14,7 @@
 #   GITHUB_OUTPUT       file that receives the outputs (required)
 #   BUILD_DATE          UTC date for the {date} tag placeholder, YYYYMMDD
 #                       (optional, defaults to the current UTC date)
+#   TARGET              image name to plan alone on workflow_dispatch (optional)
 #   GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_REF, GITHUB_REF_NAME,
 #   GITHUB_REF_TYPE, GITHUB_SHA are provided by Actions.
 set -euo pipefail
@@ -41,6 +42,7 @@ if [[ ! "$BUILD_DATE" =~ ^[0-9]{8}$ ]]; then
   echo "::error::BUILD_DATE must be YYYYMMDD" >&2
   exit 1
 fi
+TARGET="${TARGET:-}"
 if [[ -z "$REF_TYPE" && -n "${GITHUB_REF:-}" ]]; then
   if [[ "$GITHUB_REF" == refs/tags/* ]]; then
     REF_TYPE="tag"
@@ -755,6 +757,20 @@ plan_changed() {
   mapfile -t SELECT_PACKAGES < <(printf '%s\n' "${SELECT_PACKAGES[@]+"${SELECT_PACKAGES[@]}"}" | sed '/^$/d' | sort -u)
 }
 
+plan_target() {
+  if [[ ! "$TARGET" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || ! jq -e --arg n "$TARGET" '.images | has($n)' "$MODEL" >/dev/null; then
+    echo "::error::target '$TARGET' is not an image in the catalog" >&2
+    exit 1
+  fi
+  echo "Dispatch target: planning only $TARGET"
+  SELECT_IMAGES=("$TARGET")
+  SELECT_PACKAGES=()
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && SELECT_PACKAGES+=("$p")
+  done < <(jq -r --arg n "$TARGET" '.images[$n].builders.apko.needs_packages[]?' "$MODEL")
+}
+
 plan_context() {
   if [[ "$REF_TYPE" == "tag" ]]; then
     echo "release"
@@ -837,9 +853,20 @@ main() {
   local hook_kv
   hook_kv=$(run_hook)
 
+  if [[ -n "$TARGET" && "$EVENT_NAME" != "workflow_dispatch" ]]; then
+    echo "::error::target applies only to workflow_dispatch runs (event: $EVENT_NAME)" >&2
+    exit 1
+  fi
+  if [[ -n "$TARGET" && "$REF_TYPE" == "tag" ]]; then
+    echo "::error::target does not apply to runs on a tag ref" >&2
+    exit 1
+  fi
+
   if [[ "$REF_TYPE" == "tag" ]]; then
     plan_release
-  elif [[ "$TRUSTED" != "true" && ( "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "push" || "$EVENT_NAME" == "merge_group" ) ]]; then
+  elif [[ -n "$TARGET" ]]; then
+    plan_target
+  elif [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "push" || "$EVENT_NAME" == "merge_group" ]]; then
     load_all
     if compute_changed_files; then
       echo "Changed files: $(printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' | wc -l | tr -d ' ') ($EVENT_NAME)"
