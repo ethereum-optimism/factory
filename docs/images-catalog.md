@@ -460,12 +460,9 @@ run apko in a container without network.
 
 A variant with both `lockfile` and `needs_packages` uses a lock written with
 `apko lock --mark-local-packages`, where the packages built in the run are
-`local: true` entries with name, version and architecture only. When the lock
-is written against a local repository signed with a key passed through
-`--keyring-append`, remove that keyring entry from the lock: builds accept
-local packages by digest, and a lock that embeds an unconfigured key is
-rejected. Each package
-leg uploads `apk-digests-<package>-<arch>` with one `<name>=sha256:<hex>` line
+`local: true` entries with name, version and architecture only. A local key
+file passed with `--keyring-append` to read the local repository index is not
+embedded in such a lock. Each package leg uploads `apk-digests-<package>-<arch>` with one `<name>=sha256:<hex>` line
 per produced `.apk`, and apko accepts a local package only when its whole-file
 sha256 is one of those digests (`--local-package`). A local entry without a
 digest from this run fails the build.

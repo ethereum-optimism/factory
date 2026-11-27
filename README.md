@@ -185,7 +185,7 @@ To install a release locally on an Apple silicon Mac:
 
 ```sh
 tool=apko
-tag=v1.5.3-op.5
+tag=v1.5.3-op.6
 asset="op-${tool}_${tag#v}_darwin_arm64.tar.gz"
 gh release download "$tag" --repo "ethereum-optimism/${tool}" --pattern "$asset"
 gh attestation verify "$asset" \
