@@ -593,7 +593,10 @@ Trusted runs:
   attach), and fail unless the published manifest and every tag resolve to the
   tested digest (`actions/promote-image`). Docker architectures are copied by
   digest only, and the manifest job tags the manifest list;
-- merge docker manifest lists and attest apko and ko images and manifest lists;
+- merge docker manifest lists and attest apko and ko images and manifest lists:
+  a build provenance attestation and an SPDX SBOM attestation (generated with
+  syft from the published digest, `actions/attest` with `sbom-path`), both
+  pushed to the registry next to the image;
 - smoke test every architecture of the pushed digest (amd64 on the standard
   runner, arm64 on the arm runner), pulling by digest.
 
@@ -624,6 +627,43 @@ jobs:
     uses: ethereum-optimism/factory/.github/workflows/build-images.yaml@<FULL_SHA>
     with:
       target: ${{ inputs.target || '' }}
+```
+
+## Workflow outputs
+
+The reusable workflow has one output, `published`: a JSON array with one entry
+per apko or ko variant and per docker manifest list that the run published.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Publish leg id, for example `api-docker` or `worker-apko-dev`. |
+| `image` | Catalog image name. |
+| `name` | `<registry>/<repository>`. |
+| `ref` | `name:<commit tag>`. |
+| `digest` | Published digest, `sha256:...`. |
+
+The output is an empty string on untrusted runs, where the job that sets it
+does not run, and `[]` on a trusted run that published nothing. A caller
+can add jobs that use it, for example a vulnerability scan of every published
+digest:
+
+```yaml
+jobs:
+  build-images:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ethereum-optimism/factory/.github/workflows/build-images.yaml@<FULL_SHA>
+  scan:
+    needs: build-images
+    if: needs.build-images.outputs.published != '' && needs.build-images.outputs.published != '[]'
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.build-images.outputs.published) }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "scan ${{ matrix.name }}@${{ matrix.digest }}"
 ```
 
 ## Legacy catalogs
@@ -668,6 +708,8 @@ prefix.
 verification against a fake `crane`. The self-test workflow builds a docker,
 an apko, and a ko fixture into a staging registry, smoke tests the staged
 digest, promotes it to a second local registry, and smoke tests the copy.
+`actions/plan-images/published-output.test.sh` checks the `published` output
+built from the plan and the published digests.
 `actions/plan-images/plan-images.test.sh` covers normalization, validation,
 tag templates, shared repositories, tag and runner selection, legacy merging, hooks, notices, and change detection.
 `scripts/lint-untrusted-permissions.test.sh` runs the lint against the real

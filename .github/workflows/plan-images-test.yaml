@@ -64,5 +64,8 @@ jobs:
       - name: Test promote-image digest checks
         run: actions/promote-image/promote.test.sh
 
+      - name: Test the published workflow output
+        run: actions/plan-images/published-output.test.sh
+
       - name: Lint self-tests
         run: scripts/lint-untrusted-permissions.test.sh
